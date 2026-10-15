@@ -13,9 +13,11 @@ interface ColumnDef {
   targetKey: string; targetClass?: string;
   /** give every unit / NPC instance of a casts column its own lane */
   stagger: boolean;
+  /** auras: also show buffs/debuffs that are up for (nearly) the whole fight; hidden by default */
+  showLong: boolean;
 }
 /** Actor-id-free column description: units are referenced by name (players: name, falling back to class). */
-export interface SavedCol { k: Kind; t: string; c?: string; a?: string; u?: 'Buffs' | 'Debuffs'; d?: string; s?: 1; }
+export interface SavedCol { k: Kind; t: string; c?: string; a?: string; u?: 'Buffs' | 'Debuffs'; d?: string; s?: 1; l?: 1; }
 
 const PRESET_KEY = 'wclt.presets';
 const b64enc = (o: unknown) => btoa(String.fromCharCode(...new TextEncoder().encode(JSON.stringify(o))))
@@ -48,6 +50,7 @@ interface Ser { color: string; label: string; pts: [number, number, string][]; }
 export interface ColView {
   def: ColumnDef; state: ColState; width: number;
   rows: EvRow[]; auras: AuraRow[]; lanes: number; laneIdx: number[]; laneColors: string[]; lines: Line[]; marks: Mark[];
+  hidden: number; // auras left out because they last (nearly) the whole fight
 }
 
 const LIST_W = 340;   // casts / events columns
@@ -56,6 +59,7 @@ const AURA_STEP = 14; // one buff/debuff lane (labels may run across the neighbo
 const LABEL_W = 190;  // room right of the last lane for its label
 const PAD = 28;       // empty space above t=0 so labels of things active at the pull stay visible
 const MAX_LANES = 12;        // lanes of a multi-unit aura column (greedy packing)
+const LONG_AURA = 0.95;       // an aura covering at least this share of the fight counts as "whole fight"
 const MAX_LABEL_SHIFT = 45;   // max px an aura label may be pushed down from its dot
 const MAX_UNIT_LANES = 40;   // lanes of a single-unit aura column (one lane per ability)
 const STAGGER_STEP = 14; // px between instance lanes of a staggered casts column
@@ -247,7 +251,7 @@ export class App {
 
   private makeDef(opt: TargetOption, kind: Kind, ability: string, auraType: 'Buffs' | 'Debuffs', dataType: string): ColumnDef {
     const def: ColumnDef = {
-      stagger: false,
+      stagger: false, showLong: false,
       id: this.nextId++, kind, ids: opt.ids.slice(0, 12),
       hostility: opt.key === 'allA' ? 'Both' : opt.enemy ? 'Enemies' : 'Friendlies',
       ability, auraType, dataType, title: '', targetKey: opt.key, targetClass: opt.cls,
@@ -268,6 +272,7 @@ export class App {
     if (d.kind === 'auras') o.u = d.auraType;
     if (d.kind === 'events') o.d = d.dataType;
     if (d.stagger) o.s = 1;
+    if (d.kind === 'auras' && d.showLong) o.l = 1;
     return o;
   }
 
@@ -282,6 +287,7 @@ export class App {
       if (!opt) { skipped.push(sc.t.replace(/^[pef]:/, '')); continue; }
       const def = this.makeDef(opt, sc.k, sc.a ?? '', sc.u ?? 'Debuffs', sc.d ?? 'Deaths');
       def.stagger = !!sc.s;
+      def.showLong = !!sc.l;
       defs.push(def);
     }
     this.columns.set(defs);
@@ -344,6 +350,11 @@ export class App {
     const step = v.def.kind === 'auras' ? AURA_STEP : STAGGER_STEP;
     const x = e.clientX - (e.currentTarget as HTMLElement).getBoundingClientRect().left;
     this.setFocus(v.def.id, Math.max(0, Math.min(v.lanes - 1, Math.floor((x - 2) / step))));
+  }
+
+  toggleLong(id: number) {
+    this.columns.update(c => c.map(d => (d.id === id ? { ...d, showLong: !d.showLong } : d)));
+    this.syncUrl();
   }
 
   toggleStagger(id: number) {
@@ -459,7 +470,7 @@ export class App {
 
   views = computed<ColView[]>(() => this.columns().map(def => {
     const state = this.states()[def.id] ?? { loading: true, abilities: {} };
-    const base: ColView = { def, state, width: PLOT_W, rows: [], auras: [], lanes: 0, laneIdx: [], laneColors: [], lines: [], marks: [] };
+    const base: ColView = { def, state, width: PLOT_W, rows: [], auras: [], lanes: 0, laneIdx: [], laneColors: [], lines: [], marks: [], hidden: 0 };
     if (state.loading || state.error) return { ...base, width: def.kind === 'casts' || def.kind === 'events' ? LIST_W : PLOT_W };
     switch (def.kind) {
       case 'casts': case 'events': {
@@ -471,8 +482,8 @@ export class App {
         };
       }
       case 'auras': {
-        const { rows, lanes } = this.auraRows(def, state);
-        return { ...base, width: lanes * AURA_STEP + LABEL_W, auras: rows, lanes, laneIdx: Array.from({ length: lanes }, (_, i) => i) };
+        const { rows, lanes, hidden } = this.auraRows(def, state);
+        return { ...base, width: lanes * AURA_STEP + LABEL_W, auras: rows, lanes, hidden, laneIdx: Array.from({ length: lanes }, (_, i) => i) };
       }
       case 'health': return { ...base, ...this.plot(this.healthSeries(state)) };
       case 'power': return { ...base, ...this.plot(this.powerSeries(def, state)) };
@@ -518,12 +529,15 @@ export class App {
    * appearance. Several units: lanes are packed greedily by time. Labels sit at the start dot; labels that would
    * collide are pushed down so that e.g. all the buffs present at the pull form a readable list.
    */
-  private auraRows(def: ColumnDef, st: ColState): { rows: AuraRow[]; lanes: number } {
+  private auraRows(def: ColumnDef, st: ColState): { rows: AuraRow[]; lanes: number; hidden: number } {
     const single = def.ids.length === 1;
     const laneOf = new Map<string, number>();
     const laneEnd: number[] = [];
     let lastLabelBottom = -Infinity;
-    const rows = (st.spans ?? []).map(sp => {
+    const all = st.spans ?? [];
+    const whole = (this.fight()?.duration ?? 0) * LONG_AURA; // "up for the whole fight"
+    const spans = def.showLong ? all : all.filter(sp => sp.e - sp.s < whole);
+    const rows = spans.map(sp => {
       const y = this.px(sp.s), h = Math.max(0, this.px(sp.e - sp.s));
       let lane: number;
       if (single) {
@@ -552,7 +566,7 @@ export class App {
         label: def.ids.length !== 1 ? `${name} [${target}]` : name, name, target, sMs: sp.s, eMs: sp.e,
       };
     });
-    return { rows, lanes: Math.max(1, laneEnd.length) };
+    return { rows, lanes: Math.max(1, laneEnd.length), hidden: all.length - spans.length };
   }
 
   private healthSeries(st: ColState): Ser[] {

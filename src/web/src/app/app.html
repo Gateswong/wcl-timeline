@@ -88,6 +88,11 @@
                 <input type="checkbox" [checked]="v.def.stagger" (change)="toggleStagger(v.def.id)" />错开
               </label>
             }
+            @if (v.def.kind === 'auras') {
+              <label class="stag" title="默认隐藏整场（≥95% 时长）都在的光环">
+                <input type="checkbox" [checked]="v.def.showLong" (change)="toggleLong(v.def.id)" />显示整场{{ !v.def.showLong && v.hidden ? '（已隐藏 ' + v.hidden + '）' : '' }}
+              </label>
+            }
             <span class="btns">
               <button (click)="moveColumn(v.def.id, -1)" title="左移">‹</button>
               <button (click)="moveColumn(v.def.id, 1)" title="右移">›</button>
