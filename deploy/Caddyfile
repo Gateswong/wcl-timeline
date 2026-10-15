@@ -1,0 +1,8 @@
+# If wow.1up.moe is already served by another Caddy, copy only the two lines inside the site block.
+wow.1up.moe {
+	encode zstd gzip
+	redir /wcl-timeline /wcl-timeline/
+	handle_path /wcl-timeline/* {
+		reverse_proxy app:8080
+	}
+}

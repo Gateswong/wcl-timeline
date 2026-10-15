@@ -1,0 +1,7 @@
+**/node_modules
+**/bin
+**/obj
+src/Api/wwwroot
+src/web/.angular
+.env
+deploy

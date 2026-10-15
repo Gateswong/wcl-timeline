@@ -1,0 +1,4 @@
+:root { --bg: #14161b; --panel: #1d2027; --line: #2b2f39; --fg: #dfe3ea; --muted: #8b93a1; color-scheme: dark; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); font: 13px/1.4 system-ui, 'Segoe UI', sans-serif; }
+input, select, button { background: #262a33; color: var(--fg); border: 1px solid #3a3f4b; border-radius: 4px; padding: 4px 8px; font: inherit; }
+button { cursor: pointer; &:hover:not(:disabled) { background: #323846; } }

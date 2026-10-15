@@ -1,0 +1,245 @@
+<header class="top">
+  <h1>WoW Log Timeline</h1>
+  <input class="url" placeholder="粘贴 warcraftlogs.com Report 链接（可带 ?fight=）" [value]="input()"
+         (input)="input.set($any($event.target).value)" (keydown.enter)="loadReport()" />
+  <button (click)="loadReport()" [disabled]="busy()">加载</button>
+  @if (report(); as r) {
+    <select (change)="selectFight(+$any($event.target).value)" [value]="fight()?.id ?? ''">
+      <option value="" disabled [selected]="!fight()">选择战斗…（{{ r.title }}）</option>
+      @for (f of bossFights(); track f.id) {
+        <option [value]="f.id" [selected]="f.id === fight()?.id">{{ fightLabel(f) }}</option>
+      }
+    </select>
+  }
+  @if (fight()) {
+    <label class="zoom">缩放
+      <input type="range" min="3" max="100" step="1" [value]="zoom()" (input)="zoom.set(+$any($event.target).value)" />
+    </label>
+  }
+  @if (busy()) { <span class="busy">加载中…</span> }
+</header>
+
+@if (error()) { <div class="error">{{ error() }}</div> }
+
+@if (fight(); as f) {
+  <section class="add">
+    <b>添加一列：</b>
+    <select (change)="fKind.set($any($event.target).value)">
+      @for (k of kinds; track k) { <option [value]="k" [selected]="k === fKind()">{{ kindLabel[k] }}</option> }
+    </select>
+    <select (change)="fTarget.set($any($event.target).value)">
+      @for (g of targetGroups(); track g[0]) {
+        <optgroup [label]="g[0]">
+          @for (o of g[1]; track o.key) { <option [value]="o.key" [selected]="o.key === fTarget()">{{ o.label }}</option> }
+        </optgroup>
+      }
+    </select>
+    @if (fKind() === 'auras') {
+      <select (change)="fAuraType.set($any($event.target).value)">
+        <option value="Debuffs" [selected]="fAuraType() === 'Debuffs'">Debuff</option>
+        <option value="Buffs" [selected]="fAuraType() === 'Buffs'">Buff</option>
+      </select>
+    }
+    @if (fKind() === 'events') {
+      <select (change)="fDataType.set($any($event.target).value)">
+        @for (e of eventTypes; track e[0]) { <option [value]="e[0]" [selected]="e[0] === fDataType()">{{ e[1] }}</option> }
+      </select>
+    }
+    @if (fKind() === 'casts' || fKind() === 'auras') {
+      <input class="ab" placeholder="技能 ID 过滤（逗号分隔，可空）" [value]="fAbility()" (input)="fAbility.set($any($event.target).value)" />
+    }
+    <button (click)="addColumn()">添加</button>
+    @if (columns().length) {
+      <select class="rsel" title="选择要被替换的列" (change)="fReplace.set($any($event.target).value)">
+        @for (c of columns(); track c.id) {
+          <option [value]="c.id" [selected]="(fReplace() || '' + columns()[columns().length - 1].id) === '' + c.id">替换：{{ c.title }}</option>
+        }
+        <option value="all" [selected]="fReplace() === 'all'">替换：所有现有列</option>
+      </select>
+      <button (click)="replaceColumn()" title="用上面的设置替换所选列（保持原位置）">替换</button>
+    }
+  </section>
+  <section class="add presets">
+    <b>配置：</b>
+    <button (click)="copyLink()" [disabled]="!columns().length" title="地址栏链接即包含列配置（按单位名，不含 actor id）">复制分享链接</button>
+    <input class="pn" placeholder="配置名称" [value]="presetName()" (input)="presetName.set($any($event.target).value)" />
+    <button (click)="savePreset()">保存到本机</button>
+    @if (presetNames().length) {
+      <select (change)="presetSel.set($any($event.target).value)">
+        <option value="" [selected]="!presetSel()">选择已保存配置…</option>
+        @for (n of presetNames(); track n) { <option [value]="n" [selected]="n === presetSel()">{{ n }}</option> }
+      </select>
+      <button (click)="loadPreset()" [disabled]="!presetSel()">应用</button>
+      <button (click)="deletePreset()" [disabled]="!presetSel()">删除</button>
+    }
+    @if (notice()) { <span class="hint">{{ notice() }}</span> }
+  </section>
+
+  <div class="scroller">
+    <div class="sheet" [style.width.px]="totalWidth()">
+      <div class="head">
+        <div class="hcell ruler">时间</div>
+        <div class="hcell phase">阶段</div>
+        @for (v of views(); track v.def.id) {
+          <div class="hcell" [style.width.px]="v.width">
+            <span class="ttl" [title]="v.def.title">{{ v.def.title }}</span>
+            @if (v.def.kind === 'casts' || v.def.kind === 'events') {
+              <label class="stag" title="每个单位 / NPC 实例使用独立的竖线错开显示">
+                <input type="checkbox" [checked]="v.def.stagger" (change)="toggleStagger(v.def.id)" />错开
+              </label>
+            }
+            <span class="btns">
+              <button (click)="moveColumn(v.def.id, -1)" title="左移">‹</button>
+              <button (click)="moveColumn(v.def.id, 1)" title="右移">›</button>
+              <button (click)="removeColumn(v.def.id)" title="移除">×</button>
+            </span>
+            @if (v.lines.length) {
+              <span class="legend">
+                @for (l of v.lines; track l.label) { <i [style.color]="l.color">● {{ l.label }}</i> }
+              </span>
+            }
+          </div>
+        }
+      </div>
+
+      <div class="body" [style.height.px]="height()" (mousemove)="onMove($event)" (mouseleave)="hoverY.set(null); hideTip()">
+        <!-- one guide line following the pointer + phase boundaries -->
+        @if (hoverY() !== null) { <div class="guide" [style.top.px]="hoverY()"></div> }
+        @for (p of phaseBlocks(); track p.id + '-' + p.start) {
+          <div class="phaseline" [class.inter]="p.isIntermission" [style.top.px]="p.y + pad"></div>
+        }
+
+        <div class="cell ruler">
+          <div class="shift">
+            @for (t of ticks(); track t.y) {
+              <div class="tick" [class.major]="t.major" [class.minor]="t.minor" [style.top.px]="t.y">{{ t.label }}</div>
+            }
+          </div>
+          @if (hoverY() !== null) { <div class="hbadge" [style.top.px]="hoverY()! - 8">{{ hoverLabel() }}</div> }
+        </div>
+        <div class="cell phase">
+          <div class="shift">
+            @for (p of phaseBlocks(); track p.id + '-' + p.start) {
+              <div class="pblock" [class.inter]="p.isIntermission" [style.top.px]="p.y" [style.height.px]="p.h">
+                <span>{{ p.name }}</span>
+              </div>
+            }
+          </div>
+        </div>
+
+        @for (v of views(); track v.def.id) {
+          <div class="cell col" [style.width.px]="v.width" (mouseleave)="clearSoon(v.def.id)" (mousemove)="colMove(v, $event)">
+            @if (v.state.loading) { <div class="msg">加载中…</div> }
+            @if (v.state.error) { <div class="msg err">{{ v.state.error }}</div> }
+
+            <div class="shift">
+              @if (!anywhere(v) && (v.def.stagger || v.def.kind === 'auras')) { <div class="cbg" (mouseenter)="clearSoon(v.def.id)"></div> }
+              @if (v.def.kind === 'casts' || v.def.kind === 'events') {
+                @if (v.def.stagger) {
+                  @for (i of v.laneIdx; track i) {
+                    <div class="vline" [style.left.px]="i * 14 + 9" [style.background]="v.laneColors[i]" style="top: -28px"
+                         [style.opacity]="focus()?.col === v.def.id ? (focus()?.lane === i ? 1 : .2) : .45"></div>
+                    <div class="lhit" [style.left.px]="i * 14 + 2" (mouseenter)="setFocus(v.def.id, i)"></div>
+                  }
+                } @else {
+                  <div class="vline" style="left: 9px; top: -28px"></div>
+                }
+                @for (r of v.rows; track $index) {
+                  @if (r.h > 0) {
+                    <div class="cbar" [class.hl]="!!tip()?.casts?.includes(r)" [style.top.px]="r.y" [style.height.px]="r.h" [style.left.px]="r.lane * 14 + 7.5"
+                         [style.background]="r.interrupted ? '#ff4d4d' : r.color" [style.opacity]="dimmed(v.def.id, r.lane, v.def.stagger) ? .25 : null"></div>
+                    <div class="chit" [style.top.px]="r.y" [style.height.px]="r.h" [style.left.px]="r.lane * 14"
+                         (mouseenter)="showCast(v, r, true); setFocus(v.def.id, r.lane)" (mouseleave)="hideTip()"></div>
+                    <i class="dot end" [style.top.px]="r.y + r.h - 4" [style.left.px]="r.lane * 14 + 5"
+                       [style.background]="r.interrupted ? '#ff4d4d' : r.color"></i>
+                  }
+                }
+                @for (r of v.rows; track $index) {
+                  <div class="vrow" [class.dim]="dimmed(v.def.id, r.lane, v.def.stagger)" [style.top.px]="r.y - 9" [style.paddingLeft.px]="r.lane * 14"
+                       (mouseenter)="showCast(v, r); setFocus(v.def.id, r.lane)" (mouseleave)="hideTip()">
+                    <i class="dot" [style.background]="r.interrupted ? '#ff4d4d' : r.color"></i>
+                    @if (r.icon) { <img [src]="r.icon" loading="lazy" /> } @else { <i class="noicon"></i> }
+                    <span class="nm">{{ r.name }}</span>
+                    @if (r.route) { <span class="rt">{{ r.route }}</span> }
+                  </div>
+                }
+              }
+
+              @if (v.def.kind === 'auras') {
+                @for (i of v.laneIdx; track i) {
+                  <div class="vline" [style.left.px]="i * 14 + 7" style="top: -28px"
+                       [style.opacity]="focus()?.col === v.def.id ? (focus()?.lane === i ? .9 : .15) : .4"></div>
+                  <div class="lhit" [style.left.px]="i * 14" (mouseenter)="setFocus(v.def.id, i)"></div>
+                }
+                @for (a of v.auras; track $index) {
+                  <div class="aline" [class.hl]="tip()?.aura === a" [style.top.px]="a.y" [style.height.px]="a.h" [style.left.px]="a.lane * 14 + 6"
+                       [style.background]="a.color" [style.opacity]="dimmed(v.def.id, a.lane, true) ? .2 : null"></div>
+                  <i class="dot s" [style.top.px]="a.y - 3" [style.left.px]="a.lane * 14 + 4" [style.background]="a.color"
+                     [style.opacity]="dimmed(v.def.id, a.lane, true) ? .2 : null"></i>
+                  @if (a.h > 6) {
+                    <i class="dot s end" [style.top.px]="a.y + a.h - 3" [style.left.px]="a.lane * 14 + 4" [style.background]="a.color"
+                       [style.opacity]="dimmed(v.def.id, a.lane, true) ? .2 : null"></i>
+                  }
+                  <div class="alabel" [class.hl]="tip()?.aura === a" [class.dim]="dimmed(v.def.id, a.lane, true)" [style.top.px]="a.ly" [style.left.px]="a.lane * 14 + 16"
+                       [style.borderLeftColor]="a.color">
+                    @if (a.icon) { <img [src]="a.icon" loading="lazy" /> }
+                    <span>{{ a.label }}</span>
+                  </div>
+                }
+                @for (a of v.auras; track $index) {
+                  <div class="ahit" [style.top.px]="a.y - 6" [style.height.px]="a.h + 12" [style.left.px]="a.lane * 14"
+                       (mouseenter)="showAura(a); setFocus(v.def.id, a.lane)" (mouseleave)="hideTip()"></div>
+                }
+              }
+
+              @if (v.lines.length) {
+                <svg [attr.width]="v.width" [attr.height]="height() - pad" class="plot">
+                  <line [attr.x1]="v.width / 2" [attr.x2]="v.width / 2" y1="0" [attr.y2]="height() - pad" class="mid" />
+                  @for (l of v.lines; track l.label) {
+                    <polyline [attr.points]="l.points" [attr.stroke]="l.color" fill="none" stroke-width="1.5" />
+                  }
+                  @for (m of v.marks; track $index) {
+                    <circle [attr.cx]="m.x - 6" [attr.cy]="m.y" r="2.5" [attr.fill]="m.color" />
+                    <text [attr.x]="m.x" [attr.y]="m.y + 3.5" [attr.fill]="m.color" font-size="10">{{ m.text }}</text>
+                  }
+                </svg>
+              }
+            </div>
+          </div>
+        }
+      </div>
+    </div>
+  </div>
+
+  @if (tip(); as t) {
+    <div class="tip" [style.left.px]="tipPos().left" [style.top.px]="tipPos().top" [style.bottom.px]="tipPos().bottom">
+      @if (t.casts) {
+        @for (c of t.casts; track $index) {
+          <div class="tcast" [class.int]="c.interrupted">
+            @if (c.icon) { <img [src]="c.icon" /> }
+            <div>
+              <div><b>{{ c.name }}</b> <span class="muted">{{ c.time }}</span></div>
+              @if (c.route || c.src) { <div class="muted">{{ c.route || c.src }}</div> }
+              @if (c.detail) { <div class="det">{{ c.detail }}</div> }
+            </div>
+          </div>
+        }
+        @if (t.more) { <div class="muted">…另有 {{ t.more }} 个</div> }
+      }
+      @if (t.aura; as a) {
+        <div class="tcast">
+          @if (a.icon) { <img [src]="a.icon" /> }
+          <div>
+            <div><b>{{ a.name }}</b></div>
+            <div class="muted">目标：{{ a.target }}</div>
+            <div>开始 {{ fmtTimeP(a.sMs) }} · 结束 {{ fmtTimeP(a.eMs) }}</div>
+            <div>持续 {{ dur(a) }}s</div>
+            <div class="det">{{ auraNow(a) }}</div>
+          </div>
+        </div>
+      }
+    </div>
+  }
+} @else if (!busy()) {
+  <p class="empty">输入 Report 链接并选择一场战斗。需要在后端配置 Warcraft Logs API 凭据（见 README）。</p>
+}
