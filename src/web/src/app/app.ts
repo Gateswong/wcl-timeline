@@ -56,6 +56,7 @@ const AURA_STEP = 14; // one buff/debuff lane (labels may run across the neighbo
 const LABEL_W = 190;  // room right of the last lane for its label
 const PAD = 28;       // empty space above t=0 so labels of things active at the pull stay visible
 const MAX_LANES = 12;        // lanes of a multi-unit aura column (greedy packing)
+const MAX_LABEL_SHIFT = 45;   // max px an aura label may be pushed down from its dot
 const MAX_UNIT_LANES = 40;   // lanes of a single-unit aura column (one lane per ability)
 const STAGGER_STEP = 14; // px between instance lanes of a staggered casts column
 const MAX_STAGGER = 12;
@@ -539,7 +540,9 @@ export class App {
         }
         laneEnd[lane] = busy;
       }
-      const ly = Math.max(y - 9, lastLabelBottom);
+      // Push a colliding label down, but never far from its own dot (otherwise a dense column drifts further and
+      // further below the real time): beyond MAX_LABEL_SHIFT labels simply overlap.
+      const ly = Math.min(Math.max(y - 9, lastLabelBottom), y - 9 + MAX_LABEL_SHIFT);
       lastLabelBottom = ly + 15;
       const ab = st.abilities[sp.a];
       const name = ab?.name ?? `#${sp.a}`;
