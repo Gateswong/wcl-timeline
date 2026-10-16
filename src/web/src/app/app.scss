@@ -84,3 +84,7 @@ $phase-w: 84px;
 
 .aline.hl, .cbar.hl { width: 4px; margin-left: -1px; opacity: 1; filter: brightness(1.3); box-shadow: 0 0 6px 1px currentColor; }
 .alabel.hl span { font-weight: 700; }
+
+.warn, .note { width: 100%; font-size: 11px; line-height: 1.3; white-space: normal; }
+.warn { color: #ffb74d; }
+.note { color: var(--muted); }

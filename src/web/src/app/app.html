@@ -59,22 +59,6 @@
       <button (click)="replaceColumn()" title="用上面的设置替换所选列（保持原位置）">替换</button>
     }
   </section>
-  <section class="add presets">
-    <b>配置：</b>
-    <button (click)="copyLink()" [disabled]="!columns().length" title="地址栏链接即包含列配置（按单位名，不含 actor id）">复制分享链接</button>
-    <input class="pn" placeholder="配置名称" [value]="presetName()" (input)="presetName.set($any($event.target).value)" />
-    <button (click)="savePreset()">保存到本机</button>
-    @if (presetNames().length) {
-      <select (change)="presetSel.set($any($event.target).value)">
-        <option value="" [selected]="!presetSel()">选择已保存配置…</option>
-        @for (n of presetNames(); track n) { <option [value]="n" [selected]="n === presetSel()">{{ n }}</option> }
-      </select>
-      <button (click)="loadPreset()" [disabled]="!presetSel()">应用</button>
-      <button (click)="deletePreset()" [disabled]="!presetSel()">删除</button>
-    }
-    @if (notice()) { <span class="hint">{{ notice() }}</span> }
-  </section>
-
   <div class="scroller">
     <div class="sheet" [style.width.px]="totalWidth()">
       <div class="head">
@@ -92,6 +76,11 @@
               <label class="stag" title="默认隐藏整场（≥95% 时长）都在的光环">
                 <input type="checkbox" [checked]="v.def.showLong" (change)="toggleLong(v.def.id)" />显示整场{{ !v.def.showLong && v.hidden ? '（已隐藏 ' + v.hidden + '）' : '' }}
               </label>
+            }
+            @if (v.def.unresolved) {
+              <div class="warn" title="该列保持原配置，未加载数据；换到有该单位的战斗会自动恢复，也可用“替换”重新指定">⚠ 本场战斗中找不到「{{ v.def.targetKey.replace('p:', '').replace('e:', '').replace('f:', '') }}」，该列未作改动</div>
+            } @else if (v.def.note) {
+              <div class="note">{{ v.def.note }}</div>
             }
             <span class="btns">
               <button (click)="moveColumn(v.def.id, -1)" title="左移">‹</button>

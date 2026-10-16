@@ -15,11 +15,14 @@ interface ColumnDef {
   stagger: boolean;
   /** auras: also show buffs/debuffs that are up for (nearly) the whole fight; hidden by default */
   showLong: boolean;
+  /** the saved unit does not exist in this fight: the column is kept as configured, but nothing is loaded */
+  unresolved?: boolean;
+  /** shown in the column header, e.g. when a same-class player stood in for the saved one */
+  note?: string;
 }
 /** Actor-id-free column description: units are referenced by name (players: name, falling back to class). */
 export interface SavedCol { k: Kind; t: string; c?: string; a?: string; u?: 'Buffs' | 'Debuffs'; d?: string; s?: 1; l?: 1; }
 
-const PRESET_KEY = 'wclt.presets';
 const b64enc = (o: unknown) => btoa(String.fromCharCode(...new TextEncoder().encode(JSON.stringify(o))))
   .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 const b64dec = <T>(s: string): T => {
@@ -108,16 +111,11 @@ export class App {
   fAuraType = signal<'Buffs' | 'Debuffs'>('Debuffs');
   fDataType = signal('Deaths');
 
-  presets = signal<Record<string, SavedCol[]>>({});
-  presetName = signal('');
-  presetSel = signal('');
-  notice = signal('');
   private initialCols: SavedCol[] | null = null;
   /** Columns of the previously loaded report, re-applied when a fight of a new report gets selected. */
   private carry: SavedCol[] | null = null;
 
   constructor() {
-    try { this.presets.set(JSON.parse(localStorage.getItem(PRESET_KEY) ?? '{}')); } catch { /* ignore */ }
     const p = new URLSearchParams(location.search);
     const r = p.get('report');
     const c = p.get('c');
@@ -276,24 +274,36 @@ export class App {
     return o;
   }
 
-  /** Resolves saved columns against the current fight; columns whose unit is absent are skipped and reported. */
+  /**
+   * Resolves saved columns against the current fight. A column whose unit cannot be found is kept exactly as
+   * configured (so it survives further fight switches and share links) and flagged in its header instead of
+   * being changed or dropped.
+   */
   async applySaved(list: SavedCol[]) {
     const opts = this.targetOptions();
     const defs: ColumnDef[] = [];
-    const skipped: string[] = [];
     for (const sc of list) {
+      const saved = sc.t.replace(/^[pef]:/, '');
       let opt = opts.find(o => o.key === sc.t);
-      if (!opt && sc.t.startsWith('p:') && sc.c) opt = opts.find(o => o.cls === sc.c); // other player of the same class
-      if (!opt) { skipped.push(sc.t.replace(/^[pef]:/, '')); continue; }
+      let note: string | undefined;
+      if (!opt && sc.t.startsWith('p:') && sc.c) {
+        opt = opts.find(o => o.cls === sc.c); // other player of the same class
+        if (opt) note = `未找到玩家「${saved}」，已按职业（${sc.c}）改用 ${opt.label.replace(/ \(.*\)$/, '')}`;
+      }
+      const unresolved = !opt;
+      opt ??= { key: sc.t, label: saved, ids: [], enemy: sc.t.startsWith('e:'), group: '', cls: sc.c };
       const def = this.makeDef(opt, sc.k, sc.a ?? '', sc.u ?? 'Debuffs', sc.d ?? 'Deaths');
       def.stagger = !!sc.s;
       def.showLong = !!sc.l;
+      def.targetKey = sc.t; // keep the saved reference even when a stand-in was used, so the config never drifts
+      def.targetClass = sc.c ?? def.targetClass;
+      def.unresolved = unresolved;
+      def.note = note;
       defs.push(def);
     }
     this.columns.set(defs);
     this.syncUrl();
-    this.notice.set(skipped.length ? `${skipped.length} 列在本场战斗中找不到对应单位，已跳过：${[...new Set(skipped)].join('、')}` : '');
-    await Promise.all(defs.map(d => this.loadColumn(d)));
+    await Promise.all(defs.filter(d => !d.unresolved).map(d => this.loadColumn(d)));
   }
 
   /** Mirrors report, fight and columns into the address bar so the page URL is the share link. */
@@ -302,29 +312,6 @@ export class App {
     const cols = this.columns().map(d => this.toSaved(d));
     history.replaceState(null, '', `?report=${rep.code}&fight=${f.id}` + (cols.length ? `&c=${b64enc(cols)}` : ''));
   }
-
-  async copyLink() {
-    try { await navigator.clipboard.writeText(location.href); this.notice.set('分享链接已复制'); }
-    catch { this.notice.set('复制失败，请直接复制地址栏链接'); }
-  }
-
-  savePreset() {
-    const name = this.presetName().trim();
-    if (!name || !this.columns().length) { this.notice.set('请输入名称，并至少有一列'); return; }
-    this.presets.update(p => ({ ...p, [name]: this.columns().map(d => this.toSaved(d)) }));
-    this.persistPresets(); this.presetSel.set(name); this.notice.set(`已保存配置“${name}”`);
-  }
-  async loadPreset() {
-    const list = this.presets()[this.presetSel()];
-    if (list) await this.applySaved(list);
-  }
-  deletePreset() {
-    const n = this.presetSel(); if (!n) return;
-    this.presets.update(p => { const { [n]: _, ...rest } = p; return rest; });
-    this.persistPresets(); this.presetSel.set('');
-  }
-  private persistPresets() { try { localStorage.setItem(PRESET_KEY, JSON.stringify(this.presets())); } catch { /* ignore */ } }
-  presetNames = computed(() => Object.keys(this.presets()));
 
   /**
    * Lane focus: the lane under the pointer keeps its labels, the other lanes' labels are hidden.
@@ -469,7 +456,7 @@ export class App {
   totalWidth = computed(() => 56 + 84 + this.views().reduce((a, v) => a + v.width, 0));
 
   views = computed<ColView[]>(() => this.columns().map(def => {
-    const state = this.states()[def.id] ?? { loading: true, abilities: {} };
+    const state = this.states()[def.id] ?? { loading: !def.unresolved, abilities: {} };
     const base: ColView = { def, state, width: PLOT_W, rows: [], auras: [], lanes: 0, laneIdx: [], laneColors: [], lines: [], marks: [], hidden: 0 };
     if (state.loading || state.error) return { ...base, width: def.kind === 'casts' || def.kind === 'events' ? LIST_W : PLOT_W };
     switch (def.kind) {
