@@ -1,7 +1,7 @@
 import { Component, computed, signal } from '@angular/core';
 import {
   AbilityMap, Actor, Api, AurasResult, FightDetail, FightSummary, HealthSeries, LogEvent, ReportSummary, Span,
-  fmtTime, fmtTimeP, iconUrl, parseReportUrl,
+  fmtTime, fmtTimeP, iconUrl, parseReportUrl, setFetchedListener,
 } from './api';
 
 type Kind = 'casts' | 'auras' | 'health' | 'power' | 'events';
@@ -115,7 +115,32 @@ export class App {
   /** Columns of the previously loaded report, re-applied when a fight of a new report gets selected. */
   private carry: SavedCol[] | null = null;
 
+  /** Age of the data on screen: when the oldest WCL result behind it was fetched (server cache included). */
+  private fetchedAt = signal<number | null>(null);
+  private now = signal(Date.now());
+  ageText = computed(() => {
+    const at = this.fetchedAt(); if (at == null) return '';
+    const s = Math.max(0, Math.round((this.now() - at) / 1000));
+    return s < 10 ? '刚刚' : s < 60 ? `${s} 秒前` : s < 3600 ? `${Math.floor(s / 60)} 分钟前` : `${Math.floor(s / 3600)} 小时前`;
+  });
+  refreshing = signal(false);
+
+  /** Drops the server's cache for this report and reloads the report, the fight and all columns from WCL. */
+  async refresh() {
+    const rep = this.report(), f = this.fight(); if (!rep || !f) return;
+    this.refreshing.set(true); this.error.set('');
+    try {
+      await Api.refresh(rep.code);
+      this.fetchedAt.set(null);
+      this.report.set(await Api.report(rep.code));
+      await this.selectFight(f.id);
+    } catch (e) { this.error.set(String((e as Error).message)); }
+    finally { this.refreshing.set(false); }
+  }
+
   constructor() {
+    setFetchedListener(at => this.fetchedAt.update(m => (m == null ? at : Math.min(m, at))));
+    setInterval(() => this.now.set(Date.now()), 10000);
     const p = new URLSearchParams(location.search);
     const r = p.get('report');
     const c = p.get('c');
@@ -133,6 +158,7 @@ export class App {
     if (!parsed) { this.error.set('无法识别 Report 链接'); return; }
     this.busy.set(true); this.error.set('');
     try {
+      this.fetchedAt.set(null);
       const rep = await Api.report(parsed.code);
       this.report.set(rep);
       if (this.columns().length) this.carry = this.columns().map(d => this.toSaved(d));
@@ -148,6 +174,7 @@ export class App {
 
   async selectFight(id: number) {
     const rep = this.report(); if (!rep) return;
+    this.fetchedAt.set(null); // the age shown is that of the data of this fight
     this.busy.set(true); this.error.set('');
     try {
       const saved = this.initialCols ?? (this.columns().length ? this.columns().map(d => this.toSaved(d)) : this.carry);

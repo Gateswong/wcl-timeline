@@ -34,8 +34,14 @@ export function parseReportUrl(input: string): { code: string; fight?: number | 
   return { code: m[1], fight: f ? (f[1] === 'last' ? 'last' : +f[1]) : undefined };
 }
 
-async function get<T>(url: string): Promise<T> {
-  const res = await fetch(url);
+/** Called with the fetch time (unix ms) of the oldest WCL data behind each response. */
+let onFetched: ((at: number) => void) | null = null;
+export const setFetchedListener = (f: ((at: number) => void) | null) => { onFetched = f; };
+
+async function get<T>(url: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(url, init);
+  const at = Number(res.headers.get('x-data-fetched'));
+  if (at) onFetched?.(at);
   if (!res.ok) {
     let msg = `${res.status} ${res.statusText}`;
     try { msg = (await res.json()).error ?? msg; } catch { /* not json */ }
@@ -48,6 +54,7 @@ const q = (o: Record<string, string | number | undefined>) =>
   Object.entries(o).filter(([, v]) => v !== undefined && v !== '').map(([k, v]) => `${k}=${encodeURIComponent(v!)}`).join('&');
 
 export const Api = {
+  refresh: (code: string) => get<{ refreshed: boolean }>(`api/report/${code}/refresh`, { method: 'POST' }),
   report: (code: string) => get<ReportSummary>(`api/report/${code}`),
   fight: (code: string, fight: number) => get<FightDetail>(`api/report/${code}/fight/${fight}`),
   events: (code: string, fight: number, p: { dataType: string; source?: number; target?: number; ability?: string; hostility?: string; types?: string }) =>

@@ -14,12 +14,22 @@ app.UseStaticFiles();
 
 app.Use(async (ctx, next) =>
 {
+    RequestStats.Begin();
+    ctx.Response.OnStarting(() =>
+    {
+        // when the oldest WCL data behind this response was fetched (unix ms) – the UI shows its age
+        if (RequestStats.Oldest is { } at) ctx.Response.Headers["X-Data-Fetched"] = new DateTimeOffset(at).ToUnixTimeMilliseconds().ToString();
+        return Task.CompletedTask;
+    });
     try { await next(); }
     catch (WclException e) { ctx.Response.StatusCode = e.Status; await ctx.Response.WriteAsJsonAsync(new { error = e.Message }); }
     catch (InvalidOperationException e) { ctx.Response.StatusCode = 500; await ctx.Response.WriteAsJsonAsync(new { error = e.Message }); }
 });
 
 var api = app.MapGroup("/api");
+
+// Forget everything cached for a report (the UI then reloads it from WCL).
+api.MapPost("/report/{code}/refresh", (string code, WclClient w) => Results.Json(new { refreshed = w.InvalidateReport(code) }));
 
 // List fights of a report.
 api.MapGet("/report/{code}", (string code, ReportService s) => s.GetReportAsync(code));

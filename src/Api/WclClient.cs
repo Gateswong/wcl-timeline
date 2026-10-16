@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
@@ -5,6 +6,22 @@ using System.Text.Json.Nodes;
 using Microsoft.Extensions.Caching.Memory;
 
 namespace Api;
+
+/// <summary>A cached GraphQL result and when it was fetched from WCL.</summary>
+public record CacheItem(JsonNode Data, DateTime At);
+
+/// <summary>Per request: the oldest fetch time among the cached/fresh WCL results the response was built from.</summary>
+public static class RequestStats
+{
+    static readonly AsyncLocal<System.Runtime.CompilerServices.StrongBox<DateTime?>?> Cur = new();
+    public static void Begin() => Cur.Value = new System.Runtime.CompilerServices.StrongBox<DateTime?>();
+    public static void Note(DateTime at)
+    {
+        var b = Cur.Value;
+        if (b != null && (b.Value == null || at < b.Value)) b.Value = at;
+    }
+    public static DateTime? Oldest => Cur.Value?.Value;
+}
 
 public class WclOptions
 {
@@ -18,6 +35,19 @@ public class WclClient(HttpClient http, IMemoryCache cache, Microsoft.Extensions
     const string TokenUrl = "https://www.warcraftlogs.com/oauth/token";
     const string ApiUrl = "https://www.warcraftlogs.com/api/v2/client";
     static readonly SemaphoreSlim TokenLock = new(1, 1);
+    static readonly ConcurrentDictionary<string, ConcurrentDictionary<string, byte>> KeysByReport = new();
+    static readonly ConcurrentDictionary<string, DateTime> LastInvalidated = new();
+
+    /// <summary>Drops every cached result of one report. At most once per 15 s per report (protects the WCL quota).</summary>
+    public bool InvalidateReport(string code)
+    {
+        var now = DateTime.UtcNow;
+        if (LastInvalidated.TryGetValue(code, out var last) && now - last < TimeSpan.FromSeconds(15)) return false;
+        LastInvalidated[code] = now;
+        if (KeysByReport.TryRemove(code, out var keys))
+            foreach (var k in keys.Keys) cache.Remove(k);
+        return true;
+    }
 
     async Task<string> GetTokenAsync()
     {
@@ -56,7 +86,7 @@ public class WclClient(HttpClient http, IMemoryCache cache, Microsoft.Extensions
     {
         var payload = JsonSerializer.Serialize(new { query, variables });
         var key = "q:" + payload;
-        if (!refresh && cache.TryGetValue(key, out JsonNode? hit) && hit != null) return hit.DeepClone();
+        if (!refresh && cache.TryGetValue(key, out CacheItem? hit) && hit != null) { RequestStats.Note(hit.At); return hit.Data.DeepClone(); }
 
         var token = await GetTokenAsync();
         var req = new HttpRequestMessage(HttpMethod.Post, ApiUrl)
@@ -71,11 +101,20 @@ public class WclClient(HttpClient http, IMemoryCache cache, Microsoft.Extensions
         if (json["errors"] is JsonArray errs && errs.Count > 0)
             throw new WclException(errs[0]!["message"]?.GetValue<string>() ?? "GraphQL error", 400);
         var data = json["data"]!;
-        cache.Set(key, data.DeepClone(), new MemoryCacheEntryOptions
+        var item = new CacheItem(data.DeepClone(), DateTime.UtcNow);
+        var code = JsonNode.Parse(payload)!["variables"]?["code"]?.GetValue<string>();
+        var entry = new MemoryCacheEntryOptions
         {
             AbsoluteExpirationRelativeToNow = ttl ?? TimeSpan.FromHours(6),
             Size = body.Length
-        });
+        };
+        if (code != null)
+        {
+            KeysByReport.GetOrAdd(code, _ => new())[key] = 0;
+            entry.RegisterPostEvictionCallback((k, _, _, _) => { if (KeysByReport.TryGetValue(code, out var set)) set.TryRemove((string)k, out _); });
+        }
+        cache.Set(key, item, entry);
+        RequestStats.Note(item.At);
         return data;
     }
 }
