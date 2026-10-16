@@ -6,6 +6,12 @@ namespace Api;
 public class ReportService(WclClient wcl)
 {
     const int MaxPages = 60;
+    // Logs can still be uploading / a fight still running, so report-level data is cached only briefly.
+    // Event pages are keyed by the fight's end time and can stay cached for long.
+    static readonly TimeSpan ListTtl = TimeSpan.FromSeconds(30);
+    static readonly TimeSpan FightTtl = TimeSpan.FromMinutes(2);
+    static readonly TimeSpan AbilityTtl = TimeSpan.FromMinutes(10);
+    static readonly System.Collections.Concurrent.ConcurrentDictionary<string, DateTime> AbilityRefreshed = new();
 
     public async Task<object> GetReportAsync(string code)
     {
@@ -14,7 +20,7 @@ public class ReportService(WclClient wcl)
               title startTime endTime owner{name} zone{name}
               fights{id name encounterID startTime endTime kill difficulty bossPercentage fightPercentage}
             }}}
-            """, new { code });
+            """, new { code }, ListTtl);
         var r = d["reportData"]!["report"]!;
         var fights = r["fights"]!.AsArray().Select(f => new
         {
@@ -35,7 +41,7 @@ public class ReportService(WclClient wcl)
     {
         var d = await wcl.QueryAsync("""
             query($code:String!,$f:[Int]){reportData{report(code:$code){fights(fightIDs:$f){id encounterID startTime endTime}}}}
-            """, new { code, f = new[] { fightId } });
+            """, new { code, f = new[] { fightId } }, FightTtl);
         var f = d["reportData"]!["report"]!["fights"]!.AsArray().FirstOrDefault()
                 ?? throw new WclException($"Fight {fightId} not found.", 404);
         return new FightInfo(f["startTime"]!.GetValue<double>(), f["endTime"]!.GetValue<double>(), f["encounterID"]?.GetValue<int>() ?? 0);
@@ -54,7 +60,7 @@ public class ReportService(WclClient wcl)
               }
               masterData{actors{id name type subType petOwner gameID}}
             }}}
-            """, new { code, f = new[] { fightId } });
+            """, new { code, f = new[] { fightId } }, FightTtl);
         var r = d["reportData"]!["report"]!;
         var f = r["fights"]!.AsArray().FirstOrDefault() ?? throw new WclException($"Fight {fightId} not found.", 404);
         var start = f["startTime"]!.GetValue<double>();
@@ -120,11 +126,11 @@ public class ReportService(WclClient wcl)
         };
     }
 
-    async Task<Dictionary<int, JsonNode>> GetAbilitiesAsync(string code)
+    async Task<Dictionary<int, JsonNode>> GetAbilitiesAsync(string code, bool refresh = false)
     {
         var d = await wcl.QueryAsync("""
             query($code:String!){reportData{report(code:$code){masterData{abilities{gameID name icon type}}}}}
-            """, new { code });
+            """, new { code }, AbilityTtl, refresh);
         var map = new Dictionary<int, JsonNode>();
         foreach (var a in d["reportData"]!["report"]!["masterData"]!["abilities"]!.AsArray())
             map[a!["gameID"]!.GetValue<int>()] = a;
@@ -301,6 +307,12 @@ public class ReportService(WclClient wcl)
     async Task<Dictionary<int, object>> AbilitySubset(string code, HashSet<int> used)
     {
         var all = await GetAbilitiesAsync(code);
+        // New fights of a growing report can bring abilities the cached list does not know yet: reload it (at most once a minute).
+        if (used.Any(id => !all.ContainsKey(id)) && DateTime.UtcNow - AbilityRefreshed.GetValueOrDefault(code) > TimeSpan.FromMinutes(1))
+        {
+            AbilityRefreshed[code] = DateTime.UtcNow;
+            all = await GetAbilitiesAsync(code, refresh: true);
+        }
         var res = new Dictionary<int, object>();
         foreach (var id in used)
             if (all.TryGetValue(id, out var a))

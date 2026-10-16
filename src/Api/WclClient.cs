@@ -51,12 +51,12 @@ public class WclClient(HttpClient http, IMemoryCache cache, Microsoft.Extensions
         finally { TokenLock.Release(); }
     }
 
-    /// <summary>Runs a GraphQL query and returns the "data" node. Results are cached by query+variables.</summary>
-    public async Task<JsonNode> QueryAsync(string query, object? variables = null, TimeSpan? ttl = null)
+    /// <summary>Runs a GraphQL query and returns the "data" node. Results are cached by query+variables (ttl, default 6h; refresh skips the cached copy).</summary>
+    public async Task<JsonNode> QueryAsync(string query, object? variables = null, TimeSpan? ttl = null, bool refresh = false)
     {
         var payload = JsonSerializer.Serialize(new { query, variables });
         var key = "q:" + payload;
-        if (cache.TryGetValue(key, out JsonNode? hit) && hit != null) return hit.DeepClone();
+        if (!refresh && cache.TryGetValue(key, out JsonNode? hit) && hit != null) return hit.DeepClone();
 
         var token = await GetTokenAsync();
         var req = new HttpRequestMessage(HttpMethod.Post, ApiUrl)
