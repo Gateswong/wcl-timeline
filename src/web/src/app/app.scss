@@ -88,3 +88,5 @@ $phase-w: 84px;
 .warn, .note { width: 100%; font-size: 11px; line-height: 1.3; white-space: normal; }
 .warn { color: #ffb74d; }
 .note { color: var(--muted); }
+
+.gh { margin-left: auto; display: flex; color: var(--muted); &:hover { color: var(--fg); } }
