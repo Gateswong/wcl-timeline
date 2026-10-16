@@ -40,7 +40,7 @@ docker compose up -d --build
 ## 当前能力 / 已知限制
 - 列类型：施法序列、Buff/Debuff 区间、血量 %（来自 DamageTaken/Healing 事件的 hitPoints）、资源（来自施法事件的 classResources）、死亡/召唤/打断/驱散/复活。
 - 同名单位（如多只小怪）自动合并为一组，最多取 12 个实例。
-- 列配置：地址栏 URL 即分享链接（`?report=&fight=&c=`），列按单位名存储（玩家按名字，找不到时回退到同职业玩家；NPC 按名称），切换战斗/Report 会自动沿用；找不到对应单位的列保持原配置不动，列头给出提示（再切到有该单位的战斗会自动恢复）。地址栏 URL 就是配置，直接复制分享或收藏即可。
+- 列配置：地址栏 URL 即分享链接（`?report=&fight=&c=`），列按单位名存储（玩家和 NPC 都按名称精确匹配，不会用其他玩家顶替），切换战斗/Report 会自动沿用；找不到对应单位的列保持原配置不动，列头给出提示（再切到有该单位的战斗会自动恢复）。地址栏 URL 就是配置，直接复制分享或收藏即可。
 - 尚未实现：“当前目标”列、事件很密集时的虚拟滚动。
 - 已用示例 report（6qVxPcBdCgXrkG8a fight 179）验证：施法、Buff/Debuff、血量、资源、死亡/召唤、阶段均能返回并渲染。
 - WCL 事件接口的 `hostilityType` 指**来源**一方，且 DamageTaken 视图里 sourceID 实际是受害者；后端已按此处理（见 `ReportService.cs`）。

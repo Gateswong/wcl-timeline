@@ -20,7 +20,7 @@ interface ColumnDef {
   /** shown in the column header, e.g. when a same-class player stood in for the saved one */
   note?: string;
 }
-/** Actor-id-free column description: units are referenced by name (players: name, falling back to class). */
+/** Actor-id-free column description: units are referenced by name (`c`, the class, is legacy and ignored). */
 export interface SavedCol { k: Kind; t: string; c?: string; a?: string; u?: 'Buffs' | 'Debuffs'; d?: string; s?: 1; l?: 1; }
 
 const b64enc = (o: unknown) => btoa(String.fromCharCode(...new TextEncoder().encode(JSON.stringify(o))))
@@ -265,7 +265,6 @@ export class App {
 
   toSaved(d: ColumnDef): SavedCol {
     const o: SavedCol = { k: d.kind, t: d.targetKey };
-    if (d.targetClass) o.c = d.targetClass;
     if (d.ability) o.a = d.ability;
     if (d.kind === 'auras') o.u = d.auraType;
     if (d.kind === 'events') o.d = d.dataType;
@@ -284,21 +283,13 @@ export class App {
     const defs: ColumnDef[] = [];
     for (const sc of list) {
       const saved = sc.t.replace(/^[pef]:/, '');
-      let opt = opts.find(o => o.key === sc.t);
-      let note: string | undefined;
-      if (!opt && sc.t.startsWith('p:') && sc.c) {
-        opt = opts.find(o => o.cls === sc.c); // other player of the same class
-        if (opt) note = `未找到玩家「${saved}」，已按职业（${sc.c}）改用 ${opt.label.replace(/ \(.*\)$/, '')}`;
-      }
-      const unresolved = !opt;
-      opt ??= { key: sc.t, label: saved, ids: [], enemy: sc.t.startsWith('e:'), group: '', cls: sc.c };
+      const opt0 = opts.find(o => o.key === sc.t); // exact unit only: never substitute another player
+      const unresolved = !opt0;
+      const opt = opt0 ?? { key: sc.t, label: saved, ids: [], enemy: sc.t.startsWith('e:'), group: '', cls: sc.c };
       const def = this.makeDef(opt, sc.k, sc.a ?? '', sc.u ?? 'Debuffs', sc.d ?? 'Deaths');
       def.stagger = !!sc.s;
       def.showLong = !!sc.l;
-      def.targetKey = sc.t; // keep the saved reference even when a stand-in was used, so the config never drifts
-      def.targetClass = sc.c ?? def.targetClass;
       def.unresolved = unresolved;
-      def.note = note;
       defs.push(def);
     }
     this.columns.set(defs);
