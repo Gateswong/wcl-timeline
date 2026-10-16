@@ -26,12 +26,12 @@ export interface AurasResult { spans: Span[]; abilities: AbilityMap; }
 export interface HealthSeries { id: number; inst?: number; points: [number, number, number, number][]; }
 
 /** Extracts report code and fight id from a warcraftlogs.com URL (or a bare report code). */
-export function parseReportUrl(input: string): { code: string; fight?: number } | null {
+export function parseReportUrl(input: string): { code: string; fight?: number | 'last' } | null {
   const s = input.trim();
   const m = s.match(/reports\/([A-Za-z0-9]{16})/) ?? s.match(/^([A-Za-z0-9]{16})$/);
   if (!m) return null;
-  const f = s.match(/[?&#]fight=(\d+)/);
-  return { code: m[1], fight: f ? +f[1] : undefined };
+  const f = s.match(/[?&#]fight=(\d+|last)/);
+  return { code: m[1], fight: f ? (f[1] === 'last' ? 'last' : +f[1]) : undefined };
 }
 
 async function get<T>(url: string): Promise<T> {

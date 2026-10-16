@@ -137,7 +137,10 @@ export class App {
       this.report.set(rep);
       if (this.columns().length) this.carry = this.columns().map(d => this.toSaved(d));
       this.fight.set(null); this.columns.set([]);
-      const pick = parsed.fight && rep.fights.some(f => f.id === parsed.fight) ? parsed.fight : undefined;
+      // fight=last means the report's last fight; the dropdown only lists boss fights, so prefer the last of those
+      const last = [...rep.fights].reverse().find(f => f.encounterId > 0) ?? rep.fights[rep.fights.length - 1];
+      const want = parsed.fight === 'last' ? last?.id : parsed.fight;
+      const pick = want && rep.fights.some(f => f.id === want) ? want : undefined;
       if (pick) await this.selectFight(pick);
     } catch (e) { this.error.set(String((e as Error).message)); }
     finally { this.busy.set(false); }
