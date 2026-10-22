@@ -52,6 +52,7 @@ public class ReportService(WclClient wcl)
         var d = await wcl.QueryAsync("""
             query($code:String!,$f:[Int]){reportData{report(code:$code){
               phases{encounterID phases{id name isIntermission}}
+              playerDetails(fightIDs:$f)
               fights(fightIDs:$f){
                 id name encounterID startTime endTime kill difficulty bossPercentage
                 phaseTransitions{id startTime}
@@ -98,6 +99,15 @@ public class ReportService(WclClient wcl)
         foreach (var k in new[] { "friendlyPlayers", "friendlyNPCs", "friendlyPets" }) Collect(k, friendlyIds);
         foreach (var k in new[] { "enemyPlayers", "enemyNPCs" }) Collect(k, enemyIds);
 
+        // Specs come from playerDetails (a JSON scalar: {data:{playerDetails:{tanks,healers,dps}}}).
+        var specs = new Dictionary<int, (string? spec, string? icon)>();
+        var pd = r["playerDetails"]?["data"]?["playerDetails"] ?? r["playerDetails"]?["playerDetails"];
+        if (pd is JsonObject roles)
+            foreach (var (_, list) in roles)
+                foreach (var p in list as JsonArray ?? [])
+                    if (p?["id"] is JsonValue pid && pid.TryGetValue<int>(out var id))
+                        specs[id] = (p["specs"]?.AsArray().FirstOrDefault()?["spec"]?.GetValue<string>(), p["icon"]?.GetValue<string>());
+
         object Map(JsonNode a, bool enemy) => new
         {
             id = a["id"]!.GetValue<int>(),
@@ -107,6 +117,8 @@ public class ReportService(WclClient wcl)
             gameId = a["gameID"]?.GetValue<int>(),
             petOwner = a["petOwner"]?.GetValue<int>(),
             instances = instances.GetValueOrDefault(a["id"]!.GetValue<int>(), 1),
+            spec = specs.TryGetValue(a["id"]!.GetValue<int>(), out var sp) ? sp.spec : null,
+            icon = specs.TryGetValue(a["id"]!.GetValue<int>(), out var si) ? si.icon : null,
             enemy,
         };
         var actors = r["masterData"]!["actors"]!.AsArray();
@@ -181,6 +193,20 @@ public class ReportService(WclClient wcl)
         return r.SelectMany(x => x).ToList();
     }
 
+    /// <summary>
+    /// All class resources of an event as [amount, max, type]. resourceActor 2 means they belong to the target
+    /// (e.g. a heal on someone else carries that player's mana), so those are skipped.
+    /// </summary>
+    static double[][]? Resources(JsonNode e)
+    {
+        if (e["resourceActor"]?.GetValue<int>() == 2) return null;
+        var list = e["classResources"]?.AsArray()
+            .Where(c => c != null)
+            .Select(c => new[] { c!["amount"]?.GetValue<double>() ?? 0, c["max"]?.GetValue<double>() ?? 0, c["type"]?.GetValue<double>() ?? 0 })
+            .ToArray();
+        return list is { Length: > 0 } ? list : null;
+    }
+
     static int? Int(JsonNode? n) { var v = n?.GetValue<int>(); return v is null or < 0 ? null : v; }
     /// <summary>NPC instance number; events omit it for instance 1.</summary>
     static int Inst(JsonNode? n) => Int(n) ?? 1;
@@ -204,7 +230,6 @@ public class ReportService(WclClient wcl)
             var a = Int(e["abilityGameID"]);
             if (a == 0) a = null;
             if (a != null) used.Add(a.Value);
-            var cr = e["classResources"]?.AsArray().FirstOrDefault();
             list.Add(new
             {
                 t = Math.Round(e["timestamp"]!.GetValue<double>() - fi.Start),
@@ -214,7 +239,7 @@ public class ReportService(WclClient wcl)
                 si = Inst(e["sourceInstance"]),
                 ti = Inst(e["targetInstance"]),
                 a,
-                res = cr == null ? null : new[] { cr["amount"]?.GetValue<double>() ?? 0, cr["max"]?.GetValue<double>() ?? 0, cr["type"]?.GetValue<double>() ?? 0 },
+                res = Resources(e),
             });
         }
         return new { events = list, abilities = await AbilitySubset(code, used) };
@@ -240,12 +265,7 @@ public class ReportService(WclClient wcl)
         var list = new List<(double t, object item)>();
         var pending = new Dictionary<(int src, int si), Pending>();
 
-        static double[]? Res(JsonNode e)
-        {
-            var cr = e["classResources"]?.AsArray().FirstOrDefault();
-            return cr == null ? null : [cr["amount"]?.GetValue<double>() ?? 0, cr["max"]?.GetValue<double>() ?? 0, cr["type"]?.GetValue<double>() ?? 0];
-        }
-        void Emit(double t, int? src, int si, int? tgt, int ti, int? a, double[]? res, double? end, bool intr, int? by, int bi, int? ia)
+        void Emit(double t, int? src, int si, int? tgt, int ti, int? a, double[][]? res, double? end, bool intr, int? by, int bi, int? ia)
         {
             if (a == 0) a = null;
             if (a != null) used.Add(a.Value);
@@ -295,9 +315,9 @@ public class ReportService(WclClient wcl)
             else if (pending.TryGetValue(key, out var p) && p.A == a)
             {
                 pending.Remove(key);
-                Emit(p.T, src, si, tgt, ti, a, Res(e), t, false, null, 1, null);
+                Emit(p.T, src, si, tgt, ti, a, Resources(e), t, false, null, 1, null);
             }
-            else Emit(t, src, si, tgt, ti, a, Res(e), null, false, null, 1, null);
+            else Emit(t, src, si, tgt, ti, a, Resources(e), null, false, null, 1, null);
         }
         foreach (var key in pending.Keys.ToList()) Flush(key, double.MaxValue);
 

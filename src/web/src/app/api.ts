@@ -6,6 +6,8 @@ export interface ReportSummary { code: string; title?: string; zone?: string; fi
 export interface Phase { id: number; name: string; isIntermission: boolean; start: number; end: number; }
 export interface Actor {
   id: number; name: string; type: string; subType?: string; gameId?: number; petOwner?: number; enemy: boolean; instances: number;
+  /** players: spec name ("Balance") and WCL icon id ("Druid-Balance") */
+  spec?: string | null; icon?: string | null;
 }
 export interface FightDetail {
   id: number; name: string; encounterId: number; duration: number; kill?: boolean; phases: Phase[]; actors: Actor[]; names: Record<number, string>;
@@ -14,7 +16,9 @@ export interface FightDetail {
 export interface AbilityInfo { name?: string; icon?: string; }
 export type AbilityMap = Record<number, AbilityInfo>;
 export interface LogEvent {
-  t: number; type: string; src?: number; tgt?: number; a?: number; res?: [number, number, number];
+  t: number; type: string; src?: number; tgt?: number; a?: number;
+  /** the caster's class resources: [amount, max, type] per resource type */
+  res?: [number, number, number][] | null;
   /** casts with a cast time: completion (or interruption) time; `intr` marks interrupted/cancelled casts */
   end?: number | null; intr?: boolean; by?: number | null; ia?: number | null;
   /** NPC instance numbers (1-based) of source / target / interrupter */
@@ -79,4 +83,11 @@ export function fmtTime(ms: number): string {
 export function fmtTimeP(ms: number): string {
   const neg = ms < 0, s = Math.abs(ms) / 1000;
   return `${neg ? '-' : ''}${Math.floor(s / 60)}:${(s % 60).toFixed(1).padStart(4, '0')}`;
+}
+
+/** Spec icon (falls back to the class icon) for a player; undefined for NPCs. */
+export function specIconUrl(a?: Actor): string | undefined {
+  if (!a || a.type !== 'Player') return undefined;
+  const id = a.icon || a.subType;
+  return id ? `https://assets.rpglogs.com/img/warcraft/icons/${id}.jpg` : undefined;
 }

@@ -92,3 +92,25 @@ $phase-w: 84px;
 .gh { margin-left: auto; display: flex; color: var(--muted); &:hover { color: var(--fg); } }
 
 .age { font-size: 12px; color: var(--muted); white-space: nowrap; }
+
+.picker { position: relative; }
+.pbtn {
+  display: flex; align-items: center; gap: 6px; min-width: 220px; max-width: 300px; text-align: left;
+  img { width: 18px; height: 18px; border-radius: 3px; border: 1px solid #000; flex: none; }
+  span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .caret { font-style: normal; color: var(--muted); }
+}
+.pmask { position: fixed; inset: 0; z-index: 90; }
+.ppanel {
+  position: absolute; top: calc(100% + 4px); left: 0; z-index: 91; width: 320px; max-height: 60vh; overflow: auto; padding: 4px;
+  background: #11141a; border: 1px solid #4a5268; border-radius: 6px; box-shadow: 0 4px 16px #000a;
+}
+.pfilter { position: sticky; top: 0; width: 100%; box-sizing: border-box; margin-bottom: 4px; z-index: 1; box-shadow: 0 -4px 0 4px #11141a; }
+.pgroup { font-size: 11px; color: var(--muted); padding: 6px 6px 2px; }
+.popt {
+  display: flex; align-items: center; gap: 6px; padding: 3px 6px; border-radius: 4px; cursor: pointer; white-space: nowrap;
+  &:hover { background: #262a33; } &.sel { background: #2f3a55; }
+  img, .noicon { width: 20px; height: 20px; border-radius: 3px; border: 1px solid #000; flex: none; background: #333; }
+}
+.pempty { padding: 8px; color: var(--muted); }
+.rtype { font-size: 11px; padding: 1px 4px; }

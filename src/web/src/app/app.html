@@ -34,13 +34,28 @@
     <select (change)="fKind.set($any($event.target).value)">
       @for (k of kinds; track k) { <option [value]="k" [selected]="k === fKind()">{{ kindLabel[k] }}</option> }
     </select>
-    <select (change)="fTarget.set($any($event.target).value)">
-      @for (g of targetGroups(); track g[0]) {
-        <optgroup [label]="g[0]">
-          @for (o of g[1]; track o.key) { <option [value]="o.key" [selected]="o.key === fTarget()">{{ o.label }}</option> }
-        </optgroup>
+    <div class="picker">
+      <button class="pbtn" (click)="togglePicker()">
+        @if (currentTarget()?.icon) { <img [src]="currentTarget()!.icon" /> }
+        <span>{{ currentTarget()?.label ?? '选择单位…' }}</span><i class="caret">▾</i>
+      </button>
+      @if (pickerOpen()) {
+        <div class="pmask" (click)="pickerOpen.set(false)"></div>
+        <div class="ppanel">
+          <input class="pfilter" placeholder="筛选名字…" [value]="pickerFilter()" (input)="pickerFilter.set($any($event.target).value)" />
+          @for (g of filteredGroups(); track g[0]) {
+            <div class="pgroup">{{ g[0] }}</div>
+            @for (o of g[1]; track o.key) {
+              <div class="popt" [class.sel]="o.key === fTarget()" (click)="pickTarget(o.key)">
+                @if (o.icon) { <img [src]="o.icon" loading="lazy" /> } @else { <i class="noicon"></i> }
+                <span>{{ o.label }}</span>
+              </div>
+            }
+          }
+          @if (!filteredGroups().length) { <div class="pempty">没有匹配的单位</div> }
+        </div>
       }
-    </select>
+    </div>
     @if (fKind() === 'auras') {
       <select (change)="fAuraType.set($any($event.target).value)">
         <option value="Debuffs" [selected]="fAuraType() === 'Debuffs'">Debuff</option>
@@ -78,6 +93,12 @@
               <label class="stag" title="每个单位 / NPC 实例使用独立的竖线错开显示">
                 <input type="checkbox" [checked]="v.def.stagger" (change)="toggleStagger(v.def.id)" />错开
               </label>
+            }
+            @if (v.def.kind === 'power' && v.resTypes.length) {
+              <select class="rtype" title="选择要显示的资源" (change)="setResType(v.def.id, $any($event.target).value)">
+                <option value="" [selected]="v.def.resType == null">全部资源</option>
+                @for (rt of v.resTypes; track rt) { <option [value]="rt" [selected]="v.def.resType === rt">{{ resLabel(rt) }}</option> }
+              </select>
             }
             @if (v.def.kind === 'auras') {
               <label class="stag" title="默认隐藏整场（≥95% 时长）都在的光环">
@@ -132,6 +153,9 @@
           <div class="cell col" [style.width.px]="v.width" (mouseleave)="clearSoon(v.def.id)" (mousemove)="colMove(v, $event)">
             @if (v.state.loading) { <div class="msg">加载中…</div> }
             @if (v.state.error) { <div class="msg err">{{ v.state.error }}</div> }
+            @if (v.def.kind === 'power' && !v.state.loading && !v.state.error && !v.def.unresolved && !v.lines.length) {
+              <div class="msg">{{ v.def.resType != null ? '本场没有该资源数据' : '没有资源数据' }}</div>
+            }
 
             <div class="shift">
               @if (!anywhere(v) && (v.def.stagger || v.def.kind === 'auras')) { <div class="cbg" (mouseenter)="clearSoon(v.def.id)"></div> }

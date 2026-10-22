@@ -1,7 +1,7 @@
 import { Component, computed, signal } from '@angular/core';
 import {
   AbilityMap, Actor, Api, AurasResult, FightDetail, FightSummary, HealthSeries, LogEvent, ReportSummary, Span,
-  fmtTime, fmtTimeP, iconUrl, parseReportUrl, setFetchedListener,
+  fmtTime, fmtTimeP, iconUrl, parseReportUrl, setFetchedListener, specIconUrl,
 } from './api';
 
 type Kind = 'casts' | 'auras' | 'health' | 'power' | 'events';
@@ -15,13 +15,15 @@ interface ColumnDef {
   stagger: boolean;
   /** auras: also show buffs/debuffs that are up for (nearly) the whole fight; hidden by default */
   showLong: boolean;
+  /** power columns: only this resource type (undefined = every type as its own line) */
+  resType?: number;
   /** the saved unit does not exist in this fight: the column is kept as configured, but nothing is loaded */
   unresolved?: boolean;
   /** shown in the column header, e.g. when a same-class player stood in for the saved one */
   note?: string;
 }
 /** Actor-id-free column description: units are referenced by name (`c`, the class, is legacy and ignored). */
-export interface SavedCol { k: Kind; t: string; c?: string; a?: string; u?: 'Buffs' | 'Debuffs'; d?: string; s?: 1; l?: 1; }
+export interface SavedCol { k: Kind; t: string; c?: string; a?: string; u?: 'Buffs' | 'Debuffs'; d?: string; s?: 1; l?: 1; r?: number; }
 
 const b64enc = (o: unknown) => btoa(String.fromCharCode(...new TextEncoder().encode(JSON.stringify(o))))
   .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
@@ -33,7 +35,7 @@ interface ColState {
   loading: boolean; error?: string;
   events?: LogEvent[]; spans?: Span[]; series?: HealthSeries[]; abilities: AbilityMap;
 }
-interface TargetOption { key: string; label: string; ids: number[]; enemy: boolean; group: string; cls?: string; }
+interface TargetOption { key: string; label: string; ids: number[]; enemy: boolean; group: string; cls?: string; icon?: string; }
 
 /** One dot on a vertical timeline with icon, name and "caster → target". */
 export interface EvRow {
@@ -54,6 +56,7 @@ export interface ColView {
   def: ColumnDef; state: ColState; width: number;
   rows: EvRow[]; auras: AuraRow[]; lanes: number; laneIdx: number[]; laneColors: string[]; lines: Line[]; marks: Mark[];
   hidden: number; // auras left out because they last (nearly) the whole fight
+  resTypes: number[]; // power columns: resource types offered in the header
 }
 
 const LIST_W = 340;   // casts / events columns
@@ -69,6 +72,14 @@ const STAGGER_STEP = 14; // px between instance lanes of a staggered casts colum
 const MAX_STAGGER = 12;
 const MARK_STEPS = [1, 2, 5, 10, 15, 30, 60];
 const TICK_STEPS = [1, 2, 5, 10, 30, 60];
+/** WoW power types as they appear in classResources[].type */
+const RES_LABEL: Record<number, string> = {
+  0: '法力', 1: '怒气', 2: '集中值', 3: '能量', 4: '连击点', 5: '符文', 6: '符文能量', 7: '灵魂碎片', 8: '星界能量',
+  9: '神圣能量', 11: '漩涡', 12: '真气', 13: '狂乱', 17: '恶魔之怒', 18: '痛苦', 19: '精华',
+};
+const RES_COLOR: Record<number, string> = {
+  0: '#4fc3f7', 1: '#e57373', 2: '#ffb74d', 3: '#fff176', 6: '#4db6ac', 8: '#ba68c8', 9: '#ffe082', 13: '#9575cd', 17: '#a5d6a7',
+};
 const TYPE_LABEL: Record<string, string> = {
   death: '死亡', summon: '召唤', interrupt: '打断', dispel: '驱散', resurrect: '复活',
 };
@@ -84,6 +95,7 @@ const EVENT_TYPES: [string, string][] = [
   selector: 'app-root',
   templateUrl: './app.html',
   styleUrl: './app.scss',
+  host: { '(document:keydown.escape)': 'pickerOpen.set(false)' },
 })
 export class App {
   protected readonly kindLabel = KIND_LABEL;
@@ -201,7 +213,10 @@ export class App {
     const out: TargetOption[] = [];
     const players = f.actors.filter(a => a.type === 'Player');
     for (const a of players.sort((x, y) => x.name.localeCompare(y.name)))
-      out.push({ key: `p:${a.name}`, label: `${a.name} (${a.subType ?? ''})`, ids: [a.id], enemy: false, group: '玩家', cls: a.subType });
+      out.push({
+        key: `p:${a.name}`, label: `${a.name} (${a.spec ? a.spec + ' ' : ''}${a.subType ?? ''})`, ids: [a.id], enemy: false,
+        group: '玩家', cls: a.subType, icon: specIconUrl(a),
+      });
     for (const enemy of [false, true]) {
       const byName = new Map<string, Actor[]>();
       for (const a of f.actors.filter(x => x.enemy === enemy && x.type !== 'Player'))
@@ -217,6 +232,23 @@ export class App {
     out.push({ key: 'allA', label: '所有单位（不过滤）', ids: [], enemy: false, group: '全部' });
     return out;
   });
+  // unit picker (custom dropdown so options can show spec icons)
+  pickerOpen = signal(false);
+  pickerFilter = signal('');
+  currentTarget = computed(() => this.targetOptions().find(o => o.key === this.fTarget()));
+  filteredGroups = computed(() => {
+    const f = this.pickerFilter().trim().toLowerCase();
+    return this.targetGroups()
+      .map(([g, list]) => [g, f ? list.filter(o => o.label.toLowerCase().includes(f)) : list] as [string, TargetOption[]])
+      .filter(([, list]) => list.length);
+  });
+  togglePicker() {
+    this.pickerOpen.update(v => !v);
+    this.pickerFilter.set('');
+    if (this.pickerOpen()) setTimeout(() => document.querySelector<HTMLInputElement>('.pfilter')?.focus());
+  }
+  pickTarget(key: string) { this.fTarget.set(key); this.pickerOpen.set(false); }
+
   targetGroups = computed(() => {
     const g = new Map<string, TargetOption[]>();
     for (const o of this.targetOptions()) g.set(o.group, [...(g.get(o.group) ?? []), o]);
@@ -300,6 +332,7 @@ export class App {
     if (d.kind === 'events') o.d = d.dataType;
     if (d.stagger) o.s = 1;
     if (d.kind === 'auras' && d.showLong) o.l = 1;
+    if (d.kind === 'power' && d.resType != null) o.r = d.resType;
     return o;
   }
 
@@ -319,6 +352,7 @@ export class App {
       const def = this.makeDef(opt, sc.k, sc.a ?? '', sc.u ?? 'Debuffs', sc.d ?? 'Deaths');
       def.stagger = !!sc.s;
       def.showLong = !!sc.l;
+      def.resType = sc.r;
       def.unresolved = unresolved;
       defs.push(def);
     }
@@ -359,6 +393,13 @@ export class App {
     const x = e.clientX - (e.currentTarget as HTMLElement).getBoundingClientRect().left;
     this.setFocus(v.def.id, Math.max(0, Math.min(v.lanes - 1, Math.floor((x - 2) / step))));
   }
+
+  setResType(id: number, value: string) {
+    const type = value === '' ? undefined : Number(value);
+    this.columns.update(c => c.map(d => (d.id === id ? { ...d, resType: type } : d)));
+    this.syncUrl();
+  }
+  resLabel(type: number) { return RES_LABEL[type] ?? `资源#${type}`; }
 
   toggleLong(id: number) {
     this.columns.update(c => c.map(d => (d.id === id ? { ...d, showLong: !d.showLong } : d)));
@@ -478,7 +519,7 @@ export class App {
 
   views = computed<ColView[]>(() => this.columns().map(def => {
     const state = this.states()[def.id] ?? { loading: !def.unresolved, abilities: {} };
-    const base: ColView = { def, state, width: PLOT_W, rows: [], auras: [], lanes: 0, laneIdx: [], laneColors: [], lines: [], marks: [], hidden: 0 };
+    const base: ColView = { def, state, width: PLOT_W, rows: [], auras: [], lanes: 0, laneIdx: [], laneColors: [], lines: [], marks: [], hidden: 0, resTypes: [] };
     if (state.loading || state.error) return { ...base, width: def.kind === 'casts' || def.kind === 'events' ? LIST_W : PLOT_W };
     switch (def.kind) {
       case 'casts': case 'events': {
@@ -494,7 +535,11 @@ export class App {
         return { ...base, width: lanes * AURA_STEP + LABEL_W, auras: rows, lanes, hidden, laneIdx: Array.from({ length: lanes }, (_, i) => i) };
       }
       case 'health': return { ...base, ...this.plot(this.healthSeries(state)) };
-      case 'power': return { ...base, ...this.plot(this.powerSeries(def, state)) };
+      case 'power': {
+        const types = new Set((state.events ?? []).flatMap(e => (e.res ?? []).filter(r => r[1] > 0).map(r => r[2])));
+        if (def.resType != null) types.add(def.resType); // keep the chosen type selectable even if absent here
+        return { ...base, resTypes: [...types].sort((x, y) => x - y), ...this.plot(this.powerSeries(def, state)) };
+      }
     }
   }));
 
@@ -525,7 +570,8 @@ export class App {
       const lane = laneOf.get(`${e.src ?? -1}:${e.si ?? 1}`) ?? 0;
       return {
         y: this.px(e.t), h: e.end != null ? Math.max(0, this.px(e.end - e.t)) : 0, interrupted: !!e.intr,
-        icon: iconUrl(ab?.icon), name, route, time: fmtTimeP(e.t), detail, src,
+        icon: e.type === 'death' ? specIconUrl(e.tgt != null ? this.actorMap().get(e.tgt) : undefined) : iconUrl(ab?.icon),
+        name, route, time: fmtTimeP(e.t), detail, src,
         lane, color: def.stagger ? PALETTE[lane % PALETTE.length] : undefined,
       };
     });
@@ -584,10 +630,21 @@ export class App {
     }));
   }
 
+  /** One line per resource type (or only the chosen one). Mana is labelled in %, others in game units. */
   private powerSeries(def: ColumnDef, st: ColState): Ser[] {
-    const pts = (st.events ?? []).filter(e => e.res && e.res[1] > 0)
-      .map(e => [e.t, e.res![0] / e.res![1], `${Math.round(e.res![0])}`] as [number, number, string]);
-    return pts.length ? [{ color: PALETTE[1], label: `${this.actorName(def.ids[0])} 资源`, pts }] : [];
+    const byType = new Map<number, [number, number, string][]>();
+    for (const e of st.events ?? []) {
+      for (const [amt, max, type] of e.res ?? []) {
+        if (max <= 0 || (def.resType != null && type !== def.resType)) continue;
+        // Rage, runic power, astral power, … are stored ×10 (max 1000+ for 100+)
+        const text = type === 0 ? `${Math.round((amt / max) * 100)}%` : `${Math.round(max >= 500 ? amt / 10 : amt)}`;
+        if (!byType.has(type)) byType.set(type, []);
+        byType.get(type)!.push([e.t, amt / max, text]);
+      }
+    }
+    return [...byType].sort((x, y) => x[0] - y[0]).map(([type, pts], i) => ({
+      color: RES_COLOR[type] ?? PALETTE[i % PALETTE.length], label: this.resLabel(type), pts,
+    }));
   }
 
   /** Step-after polylines plus value labels every N seconds (N shrinks as the zoom grows). */
