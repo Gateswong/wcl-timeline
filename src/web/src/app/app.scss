@@ -114,3 +114,11 @@ $phase-w: 84px;
 }
 .pempty { padding: 8px; color: var(--muted); }
 .rtype { font-size: 11px; padding: 1px 4px; }
+
+.fwrap { position: relative; }
+.fbtn { font-size: 11px; padding: 1px 6px; &.on { border-color: #ffb74d; color: #ffb74d; } }
+.fpanel { width: 330px; font-weight: normal; white-space: normal; }
+.frow { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding: 4px 6px; }
+.fdur { width: 70px; }
+.fbtns button { font-size: 11px; padding: 1px 6px; }
+label.popt { input { margin: 0; } .cnt { margin-left: auto; font-style: normal; color: var(--muted); } }

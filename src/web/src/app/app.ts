@@ -13,8 +13,10 @@ interface ColumnDef {
   targetKey: string; targetClass?: string;
   /** give every unit / NPC instance of a casts column its own lane */
   stagger: boolean;
-  /** auras: also show buffs/debuffs that are up for (nearly) the whole fight; hidden by default */
-  showLong: boolean;
+  /** auras: only show auras shorter than this many seconds (undefined = no limit) */
+  maxDur?: number;
+  /** auras: allowed source keys (see sourceKey); undefined = every source */
+  srcFilter?: string[];
   /** power columns: only this resource type (undefined = every type as its own line) */
   resType?: number;
   /** the saved unit does not exist in this fight: the column is kept as configured, but nothing is loaded */
@@ -23,7 +25,7 @@ interface ColumnDef {
   note?: string;
 }
 /** Actor-id-free column description: units are referenced by name (`c`, the class, is legacy and ignored). */
-export interface SavedCol { k: Kind; t: string; c?: string; a?: string; u?: 'Buffs' | 'Debuffs'; d?: string; s?: 1; l?: 1; r?: number; }
+export interface SavedCol { k: Kind; t: string; c?: string; a?: string; u?: 'Buffs' | 'Debuffs'; d?: string; s?: 1; r?: number; x?: number; f?: string[]; }
 
 const b64enc = (o: unknown) => btoa(String.fromCharCode(...new TextEncoder().encode(JSON.stringify(o))))
   .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
@@ -45,8 +47,10 @@ export interface EvRow {
 /** A buff/debuff: start dot, end dot and a connecting line, placed in a lane. */
 export interface AuraRow {
   y: number; h: number; lane: number; ly: number; color: string; icon?: string; label: string;
-  name: string; target: string; sMs: number; eMs: number;
+  name: string; target: string; source: string; sMs: number; eMs: number;
 }
+/** One aura source offered in an aura column's filter panel. */
+export interface SrcOpt { key: string; label: string; icon?: string; group: string; count: number; }
 export interface Tip { casts?: EvRow[]; more?: number; aura?: AuraRow; }
 export interface Line { color: string; points: string; label: string; }
 export interface Mark { x: number; y: number; text: string; color: string; }
@@ -57,6 +61,7 @@ export interface ColView {
   rows: EvRow[]; auras: AuraRow[]; lanes: number; laneIdx: number[]; laneColors: string[]; lines: Line[]; marks: Mark[];
   hidden: number; // auras left out because they last (nearly) the whole fight
   resTypes: number[]; // power columns: resource types offered in the header
+  sources: SrcOpt[];  // aura columns: who applied the loaded auras
 }
 
 const LIST_W = 340;   // casts / events columns
@@ -65,7 +70,6 @@ const AURA_STEP = 14; // one buff/debuff lane (labels may run across the neighbo
 const LABEL_W = 190;  // room right of the last lane for its label
 const PAD = 28;       // empty space above t=0 so labels of things active at the pull stay visible
 const MAX_LANES = 12;        // lanes of a multi-unit aura column (greedy packing)
-const LONG_AURA = 0.95;       // an aura covering at least this share of the fight counts as "whole fight"
 const MAX_LABEL_SHIFT = 45;   // max px an aura label may be pushed down from its dot
 const MAX_UNIT_LANES = 40;   // lanes of a single-unit aura column (one lane per ability)
 const STAGGER_STEP = 14; // px between instance lanes of a staggered casts column
@@ -95,7 +99,7 @@ const EVENT_TYPES: [string, string][] = [
   selector: 'app-root',
   templateUrl: './app.html',
   styleUrl: './app.scss',
-  host: { '(document:keydown.escape)': 'pickerOpen.set(false)' },
+  host: { '(document:keydown.escape)': 'pickerOpen.set(false); filterOpen.set(null)' },
 })
 export class App {
   protected readonly kindLabel = KIND_LABEL;
@@ -311,7 +315,7 @@ export class App {
 
   private makeDef(opt: TargetOption, kind: Kind, ability: string, auraType: 'Buffs' | 'Debuffs', dataType: string): ColumnDef {
     const def: ColumnDef = {
-      stagger: false, showLong: false,
+      stagger: false,
       id: this.nextId++, kind, ids: opt.ids.slice(0, 12),
       hostility: opt.key === 'allA' ? 'Both' : opt.enemy ? 'Enemies' : 'Friendlies',
       ability, auraType, dataType, title: '', targetKey: opt.key, targetClass: opt.cls,
@@ -331,7 +335,10 @@ export class App {
     if (d.kind === 'auras') o.u = d.auraType;
     if (d.kind === 'events') o.d = d.dataType;
     if (d.stagger) o.s = 1;
-    if (d.kind === 'auras' && d.showLong) o.l = 1;
+    if (d.kind === 'auras') {
+      if (d.maxDur != null) o.x = d.maxDur;
+      if (d.srcFilter) o.f = d.srcFilter;
+    }
     if (d.kind === 'power' && d.resType != null) o.r = d.resType;
     return o;
   }
@@ -351,7 +358,8 @@ export class App {
       const opt = opt0 ?? { key: sc.t, label: saved, ids: [], enemy: sc.t.startsWith('e:'), group: '', cls: sc.c };
       const def = this.makeDef(opt, sc.k, sc.a ?? '', sc.u ?? 'Debuffs', sc.d ?? 'Deaths');
       def.stagger = !!sc.s;
-      def.showLong = !!sc.l;
+      def.maxDur = sc.x;
+      def.srcFilter = sc.f;
       def.resType = sc.r;
       def.unresolved = unresolved;
       defs.push(def);
@@ -401,9 +409,62 @@ export class App {
   }
   resLabel(type: number) { return RES_LABEL[type] ?? `资源#${type}`; }
 
-  toggleLong(id: number) {
-    this.columns.update(c => c.map(d => (d.id === id ? { ...d, showLong: !d.showLong } : d)));
+  // ---------- aura filter panel ----------
+
+  filterOpen = signal<number | null>(null);
+  filterActive(d: ColumnDef) { return d.maxDur != null || !!d.srcFilter; }
+  isSrcOn(d: ColumnDef, key: string) { return !d.srcFilter || d.srcFilter.includes(key); }
+
+  /** Name-based key of an aura source, like the column target keys: p:/e:/f: + name, u: when unknown. */
+  sourceKey(id?: number | null): string {
+    if (id == null) return 'u:';
+    const a = this.actorMap().get(id);
+    if (!a) return `u:${this.actorName(id)}`;
+    return `${a.type === 'Player' ? 'p' : a.enemy ? 'e' : 'f'}:${a.name}`;
+  }
+
+  private auraSources(st: ColState): SrcOpt[] {
+    const GROUP: Record<string, string> = { p: '玩家', e: '敌方单位', f: '友方 NPC / 宠物', u: '未知' };
+    const by = new Map<string, SrcOpt>();
+    for (const sp of st.spans ?? []) {
+      const key = this.sourceKey(sp.src);
+      const o = by.get(key);
+      if (o) { o.count++; continue; }
+      const a = sp.src != null ? this.actorMap().get(sp.src) : undefined;
+      by.set(key, { key, label: key.slice(2) || '未知', icon: specIconUrl(a), group: GROUP[key[0]], count: 1 });
+    }
+    const order = 'peful';
+    return [...by.values()].sort((x, y) => order.indexOf(x.key[0]) - order.indexOf(y.key[0]) || y.count - x.count);
+  }
+  srcGroups(v: ColView): [string, SrcOpt[]][] {
+    const g = new Map<string, SrcOpt[]>();
+    for (const s of v.sources) g.set(s.group, [...(g.get(s.group) ?? []), s]);
+    return [...g];
+  }
+
+  private patchCol(id: number, change: Partial<ColumnDef>) {
+    this.columns.update(c => c.map(d => (d.id === id ? { ...d, ...change } : d)));
     this.syncUrl();
+  }
+  /** Stores the allowed sources; "everything present" is stored as no filter so other fights are not affected. */
+  private setSources(v: ColView, keys: Set<string>) {
+    const all = v.sources.map(s => s.key);
+    this.patchCol(v.def.id, { srcFilter: all.every(k => keys.has(k)) ? undefined : [...keys] });
+  }
+  toggleSrc(v: ColView, key: string) {
+    const keys = new Set(v.def.srcFilter ?? v.sources.map(s => s.key));
+    if (keys.has(key)) keys.delete(key); else keys.add(key);
+    this.setSources(v, keys);
+  }
+  /** group: 'p' players, 'e' enemies, '' everything */
+  setSrcGroup(v: ColView, group: string, on: boolean) {
+    const keys = new Set(v.def.srcFilter ?? v.sources.map(s => s.key));
+    for (const s of v.sources) if (!group || s.key.startsWith(group + ':')) { if (on) keys.add(s.key); else keys.delete(s.key); }
+    this.setSources(v, keys);
+  }
+  setMaxDur(id: number, value: string) {
+    const n = parseFloat(value);
+    this.patchCol(id, { maxDur: Number.isFinite(n) && n > 0 ? n : undefined });
   }
 
   toggleStagger(id: number) {
@@ -519,7 +580,7 @@ export class App {
 
   views = computed<ColView[]>(() => this.columns().map(def => {
     const state = this.states()[def.id] ?? { loading: !def.unresolved, abilities: {} };
-    const base: ColView = { def, state, width: PLOT_W, rows: [], auras: [], lanes: 0, laneIdx: [], laneColors: [], lines: [], marks: [], hidden: 0, resTypes: [] };
+    const base: ColView = { def, state, width: PLOT_W, rows: [], auras: [], lanes: 0, laneIdx: [], laneColors: [], lines: [], marks: [], hidden: 0, resTypes: [], sources: [] };
     if (state.loading || state.error) return { ...base, width: def.kind === 'casts' || def.kind === 'events' ? LIST_W : PLOT_W };
     switch (def.kind) {
       case 'casts': case 'events': {
@@ -532,7 +593,7 @@ export class App {
       }
       case 'auras': {
         const { rows, lanes, hidden } = this.auraRows(def, state);
-        return { ...base, width: lanes * AURA_STEP + LABEL_W, auras: rows, lanes, hidden, laneIdx: Array.from({ length: lanes }, (_, i) => i) };
+        return { ...base, width: lanes * AURA_STEP + LABEL_W, auras: rows, lanes, hidden, sources: this.auraSources(state), laneIdx: Array.from({ length: lanes }, (_, i) => i) };
       }
       case 'health': return { ...base, ...this.plot(this.healthSeries(state)) };
       case 'power': {
@@ -589,8 +650,8 @@ export class App {
     const laneEnd: number[] = [];
     let lastLabelBottom = -Infinity;
     const all = st.spans ?? [];
-    const whole = (this.fight()?.duration ?? 0) * LONG_AURA; // "up for the whole fight"
-    const spans = def.showLong ? all : all.filter(sp => sp.e - sp.s < whole);
+    const spans = all.filter(sp =>
+      (def.maxDur == null || sp.e - sp.s < def.maxDur * 1000) && (!def.srcFilter || def.srcFilter.includes(this.sourceKey(sp.src))));
     const rows = spans.map(sp => {
       const y = this.px(sp.s), h = Math.max(0, this.px(sp.e - sp.s));
       let lane: number;
@@ -617,7 +678,7 @@ export class App {
       const target = this.unitName(sp.tgt, sp.ti);
       return {
         y, h, lane, ly, color: PALETTE[sp.a % PALETTE.length], icon: iconUrl(ab?.icon),
-        label: def.ids.length !== 1 ? `${name} [${target}]` : name, name, target, sMs: sp.s, eMs: sp.e,
+        label: def.ids.length !== 1 ? `${name} [${target}]` : name, name, target, source: this.unitName(sp.src, sp.si), sMs: sp.s, eMs: sp.e,
       };
     });
     return { rows, lanes: Math.max(1, laneEnd.length), hidden: all.length - spans.length };

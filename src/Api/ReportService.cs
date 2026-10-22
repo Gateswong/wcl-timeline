@@ -348,13 +348,13 @@ public class ReportService(WclClient wcl)
         var raw = await FetchBothAsync(code, fi, type, target, null, ability);
         var dur = fi.End - fi.Start;
 
-        var open = new Dictionary<(int tgt, int ti, int ab), (double start, int stacks)>();
+        var open = new Dictionary<(int tgt, int ti, int ab), (double start, int? src, int si)>();
         var spans = new List<object>();
         var used = new HashSet<int>();
         void Close((int tgt, int ti, int ab) k, double end)
         {
             if (!open.Remove(k, out var o)) return;
-            spans.Add(new { tgt = k.tgt, ti = k.ti, a = k.ab, s = o.start, e = end });
+            spans.Add(new { tgt = k.tgt, ti = k.ti, a = k.ab, s = o.start, e = end, src = o.src, si = o.si });
         }
         foreach (var e in raw.OrderBy(x => x["timestamp"]!.GetValue<double>()))
         {
@@ -363,10 +363,13 @@ public class ReportService(WclClient wcl)
             var tg = Int(e["targetID"]); var ab = Int(e["abilityGameID"]);
             if (tg == null || ab == null) continue;
             var k = (tg.Value, Inst(e["targetInstance"]), ab.Value);
-            if (ty is "applybuff" or "applydebuff") { used.Add(ab.Value); if (!open.ContainsKey(k)) open[k] = (t, 1); }
+            // who applied it: the caster of the latest apply/refresh (or of the remove, for auras up before the pull)
+            var src = Int(e["sourceID"]); var si = Inst(e["sourceInstance"]);
+            if (ty is "applybuff" or "applydebuff") { used.Add(ab.Value); if (!open.ContainsKey(k)) open[k] = (t, src, si); }
+            else if (ty is "refreshbuff" or "refreshdebuff") { if (open.TryGetValue(k, out var o) && src != null) open[k] = (o.start, src, si); }
             else if (ty is "removebuff" or "removedebuff")
             {
-                if (!open.ContainsKey(k)) open[k] = (0, 1); // applied before the fight window
+                if (!open.ContainsKey(k)) open[k] = (0, src, si); // applied before the fight window
                 used.Add(ab.Value);
                 Close(k, t);
             }

@@ -25,7 +25,11 @@ export interface LogEvent {
   si?: number; ti?: number; bi?: number;
 }
 export interface EventsResult { events: LogEvent[]; abilities: AbilityMap; }
-export interface Span { tgt: number; ti?: number; a: number; s: number; e: number; }
+export interface Span {
+  tgt: number; ti?: number; a: number; s: number; e: number;
+  /** who applied it (latest apply/refresh) and that unit's instance */
+  src?: number | null; si?: number;
+}
 export interface AurasResult { spans: Span[]; abilities: AbilityMap; }
 export interface HealthSeries { id: number; inst?: number; points: [number, number, number, number][]; }
 

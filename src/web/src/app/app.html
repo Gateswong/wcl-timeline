@@ -101,9 +101,38 @@
               </select>
             }
             @if (v.def.kind === 'auras') {
-              <label class="stag" title="默认隐藏整场（≥95% 时长）都在的光环">
-                <input type="checkbox" [checked]="v.def.showLong" (change)="toggleLong(v.def.id)" />显示整场{{ !v.def.showLong && v.hidden ? '（已隐藏 ' + v.hidden + '）' : '' }}
-              </label>
+              <span class="fwrap">
+                <button class="fbtn" [class.on]="filterActive(v.def)" (click)="filterOpen.set(filterOpen() === v.def.id ? null : v.def.id)"
+                        title="按施加来源和持续时间过滤">过滤 ▾{{ v.hidden ? '（已隐藏 ' + v.hidden + '）' : '' }}</button>
+                @if (filterOpen() === v.def.id) {
+                  <div class="pmask" (click)="filterOpen.set(null)"></div>
+                  <div class="ppanel fpanel">
+                    <div class="frow">只显示少于
+                      <input type="number" min="0" step="1" class="fdur" placeholder="不限" [value]="v.def.maxDur ?? ''"
+                             (change)="setMaxDur(v.def.id, $any($event.target).value)" /> 秒
+                    </div>
+                    <div class="frow fbtns">
+                      <button (click)="setSrcGroup(v, '', true)">全部</button>
+                      <button (click)="setSrcGroup(v, '', false)">全不选</button>
+                      <button (click)="setSrcGroup(v, 'p', true)">勾选玩家</button>
+                      <button (click)="setSrcGroup(v, 'p', false)">取消玩家</button>
+                      <button (click)="setSrcGroup(v, 'e', true)">勾选敌方</button>
+                      <button (click)="setSrcGroup(v, 'e', false)">取消敌方</button>
+                    </div>
+                    @for (g of srcGroups(v); track g[0]) {
+                      <div class="pgroup">来源 · {{ g[0] }}</div>
+                      @for (s of g[1]; track s.key) {
+                        <label class="popt">
+                          <input type="checkbox" [checked]="isSrcOn(v.def, s.key)" (change)="toggleSrc(v, s.key)" />
+                          @if (s.icon) { <img [src]="s.icon" loading="lazy" /> } @else { <i class="noicon"></i> }
+                          <span>{{ s.label }}</span><i class="cnt">{{ s.count }}</i>
+                        </label>
+                      }
+                    }
+                    @if (!v.sources.length) { <div class="pempty">没有来源数据</div> }
+                  </div>
+                }
+              </span>
             }
             @if (v.def.unresolved) {
               <div class="warn" title="该列保持原配置，未加载数据；换到有该单位的战斗会自动恢复，也可用“替换”重新指定">⚠ 本场战斗中找不到「{{ v.def.targetKey.replace('p:', '').replace('e:', '').replace('f:', '') }}」，该列未作改动</div>
@@ -257,6 +286,7 @@
           <div>
             <div><b>{{ a.name }}</b></div>
             <div class="muted">目标：{{ a.target }}</div>
+            <div class="muted">来源：{{ a.source || '未知' }}</div>
             <div>开始 {{ fmtTimeP(a.sMs) }} · 结束 {{ fmtTimeP(a.eMs) }}</div>
             <div>持续 {{ dur(a) }}s</div>
             <div class="det">{{ auraNow(a) }}</div>
