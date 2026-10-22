@@ -158,8 +158,8 @@ public class ReportService(WclClient wcl)
         if (!string.IsNullOrWhiteSpace(ability))
         {
             var ids = ability.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Select(double.Parse).ToArray();
-            if (ids.Length == 1) singleAbility = ids[0];
-            else if (ids.Length > 1)
+            // Always use the filter expression: the abilityID argument returns nothing for Buffs/Debuffs.
+            if (ids.Length > 0)
             {
                 var e = $"ability.id in ({string.Join(",", ids.Select(i => (long)i))})";
                 expr = expr == null ? e : $"({expr}) and {e}";

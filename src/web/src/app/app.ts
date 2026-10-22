@@ -17,6 +17,8 @@ interface ColumnDef {
   maxDur?: number;
   /** auras: allowed source keys (see sourceKey); undefined = every source */
   srcFilter?: string[];
+  /** auras: ability ids to show among the loaded ones (client side); undefined = all */
+  abFilter?: number[];
   /** power columns: only this resource type (undefined = every type as its own line) */
   resType?: number;
   /** the saved unit does not exist in this fight: the column is kept as configured, but nothing is loaded */
@@ -25,7 +27,7 @@ interface ColumnDef {
   note?: string;
 }
 /** Actor-id-free column description: units are referenced by name (`c`, the class, is legacy and ignored). */
-export interface SavedCol { k: Kind; t: string; c?: string; a?: string; u?: 'Buffs' | 'Debuffs'; d?: string; s?: 1; r?: number; x?: number; f?: string[]; }
+export interface SavedCol { k: Kind; t: string; c?: string; a?: string; u?: 'Buffs' | 'Debuffs'; d?: string; s?: 1; r?: number; x?: number; f?: string[]; b?: number[]; }
 
 const b64enc = (o: unknown) => btoa(String.fromCharCode(...new TextEncoder().encode(JSON.stringify(o))))
   .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
@@ -51,6 +53,8 @@ export interface AuraRow {
 }
 /** One aura source offered in an aura column's filter panel. */
 export interface SrcOpt { key: string; label: string; icon?: string; group: string; count: number; }
+/** One buff/debuff offered in an aura column's filter panel. */
+export interface AbOpt { id: number; name: string; icon?: string; count: number; }
 export interface Tip { casts?: EvRow[]; more?: number; aura?: AuraRow; }
 export interface Line { color: string; points: string; label: string; }
 export interface Mark { x: number; y: number; text: string; color: string; }
@@ -62,6 +66,7 @@ export interface ColView {
   hidden: number; // auras left out because they last (nearly) the whole fight
   resTypes: number[]; // power columns: resource types offered in the header
   sources: SrcOpt[];  // aura columns: who applied the loaded auras
+  abilities: AbOpt[]; // aura columns: which buffs/debuffs were loaded
 }
 
 const LIST_W = 340;   // casts / events columns
@@ -338,6 +343,7 @@ export class App {
     if (d.kind === 'auras') {
       if (d.maxDur != null) o.x = d.maxDur;
       if (d.srcFilter) o.f = d.srcFilter;
+      if (d.abFilter) o.b = d.abFilter;
     }
     if (d.kind === 'power' && d.resType != null) o.r = d.resType;
     return o;
@@ -360,6 +366,7 @@ export class App {
       def.stagger = !!sc.s;
       def.maxDur = sc.x;
       def.srcFilter = sc.f;
+      def.abFilter = sc.b;
       def.resType = sc.r;
       def.unresolved = unresolved;
       defs.push(def);
@@ -412,7 +419,8 @@ export class App {
   // ---------- aura filter panel ----------
 
   filterOpen = signal<number | null>(null);
-  filterActive(d: ColumnDef) { return d.maxDur != null || !!d.srcFilter; }
+  filterActive(d: ColumnDef) { return d.maxDur != null || !!d.srcFilter || !!d.abFilter || !!d.ability; }
+  abSearch = signal('');
   isSrcOn(d: ColumnDef, key: string) { return !d.srcFilter || d.srcFilter.includes(key); }
 
   /** Name-based key of an aura source, like the column target keys: p:/e:/f: + name, u: when unknown. */
@@ -440,6 +448,46 @@ export class App {
     const g = new Map<string, SrcOpt[]>();
     for (const s of v.sources) g.set(s.group, [...(g.get(s.group) ?? []), s]);
     return [...g];
+  }
+
+  private auraAbilities(st: ColState): AbOpt[] {
+    const by = new Map<number, AbOpt>();
+    for (const sp of st.spans ?? []) {
+      const o = by.get(sp.a);
+      if (o) { o.count++; continue; }
+      const ab = st.abilities[sp.a];
+      by.set(sp.a, { id: sp.a, name: ab?.name ?? `#${sp.a}`, icon: iconUrl(ab?.icon), count: 1 });
+    }
+    return [...by.values()].sort((x, y) => y.count - x.count || x.name.localeCompare(y.name));
+  }
+  /** Abilities listed in the panel: those matching the search box. */
+  listedAbilities(v: ColView): AbOpt[] {
+    const f = this.abSearch().trim().toLowerCase();
+    return f ? v.abilities.filter(a => a.name.toLowerCase().includes(f) || String(a.id).includes(f)) : v.abilities;
+  }
+  isAbOn(d: ColumnDef, id: number) { return !d.abFilter || d.abFilter.includes(id); }
+  private setAbilities(v: ColView, ids: Set<number>) {
+    this.patchCol(v.def.id, { abFilter: v.abilities.every(a => ids.has(a.id)) ? undefined : [...ids] });
+  }
+  toggleAb(v: ColView, id: number) {
+    const ids = new Set(v.def.abFilter ?? v.abilities.map(a => a.id));
+    if (ids.has(id)) ids.delete(id); else ids.add(id);
+    this.setAbilities(v, ids);
+  }
+  /** Checks / unchecks the abilities currently listed (all of them, or those matching the search). */
+  setAbAll(v: ColView, on: boolean) {
+    const ids = new Set(v.def.abFilter ?? v.abilities.map(a => a.id));
+    for (const a of this.listedAbilities(v)) { if (on) ids.add(a.id); else ids.delete(a.id); }
+    this.setAbilities(v, ids);
+  }
+  /** Changes the server-side load scope (ability ids) of a column and reloads it from the API. */
+  async setLoadIds(id: number, value: string) {
+    const ability = value.split(/[,，\s]+/).map(s => s.trim()).filter(s => /^\d+$/.test(s)).join(',');
+    const def = this.columns().find(c => c.id === id);
+    if (!def || def.ability === ability) return;
+    this.patchCol(id, { ability, abFilter: undefined });
+    const updated = this.columns().find(c => c.id === id);
+    if (updated && !updated.unresolved) await this.loadColumn(updated);
   }
 
   private patchCol(id: number, change: Partial<ColumnDef>) {
@@ -580,7 +628,7 @@ export class App {
 
   views = computed<ColView[]>(() => this.columns().map(def => {
     const state = this.states()[def.id] ?? { loading: !def.unresolved, abilities: {} };
-    const base: ColView = { def, state, width: PLOT_W, rows: [], auras: [], lanes: 0, laneIdx: [], laneColors: [], lines: [], marks: [], hidden: 0, resTypes: [], sources: [] };
+    const base: ColView = { def, state, width: PLOT_W, rows: [], auras: [], lanes: 0, laneIdx: [], laneColors: [], lines: [], marks: [], hidden: 0, resTypes: [], sources: [], abilities: [] };
     if (state.loading || state.error) return { ...base, width: def.kind === 'casts' || def.kind === 'events' ? LIST_W : PLOT_W };
     switch (def.kind) {
       case 'casts': case 'events': {
@@ -593,7 +641,7 @@ export class App {
       }
       case 'auras': {
         const { rows, lanes, hidden } = this.auraRows(def, state);
-        return { ...base, width: lanes * AURA_STEP + LABEL_W, auras: rows, lanes, hidden, sources: this.auraSources(state), laneIdx: Array.from({ length: lanes }, (_, i) => i) };
+        return { ...base, width: lanes * AURA_STEP + LABEL_W, auras: rows, lanes, hidden, sources: this.auraSources(state), abilities: this.auraAbilities(state), laneIdx: Array.from({ length: lanes }, (_, i) => i) };
       }
       case 'health': return { ...base, ...this.plot(this.healthSeries(state)) };
       case 'power': {
@@ -651,7 +699,8 @@ export class App {
     let lastLabelBottom = -Infinity;
     const all = st.spans ?? [];
     const spans = all.filter(sp =>
-      (def.maxDur == null || sp.e - sp.s < def.maxDur * 1000) && (!def.srcFilter || def.srcFilter.includes(this.sourceKey(sp.src))));
+      (def.maxDur == null || sp.e - sp.s < def.maxDur * 1000) && (!def.srcFilter || def.srcFilter.includes(this.sourceKey(sp.src)))
+      && (!def.abFilter || def.abFilter.includes(sp.a)));
     const rows = spans.map(sp => {
       const y = this.px(sp.s), h = Math.max(0, this.px(sp.e - sp.s));
       let lane: number;

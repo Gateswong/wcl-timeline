@@ -122,3 +122,9 @@ $phase-w: 84px;
 .fdur { width: 70px; }
 .fbtns button { font-size: 11px; padding: 1px 6px; }
 label.popt { input { margin: 0; } .cnt { margin-left: auto; font-style: normal; color: var(--muted); } }
+
+.fsec { font-size: 12px; font-weight: 600; padding: 6px 6px 0; border-top: 1px solid var(--line); &:first-child { border-top: 0; } }
+.fhint { font-size: 11px; color: var(--muted); padding: 0 6px 4px; }
+.fids { flex: 1; min-width: 120px; }
+.fsearch { flex: 1; min-width: 120px; font-size: 12px; }
+.fpanel .frow button { font-size: 11px; padding: 1px 6px; }

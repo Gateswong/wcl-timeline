@@ -68,7 +68,7 @@
       </select>
     }
     @if (fKind() === 'casts' || fKind() === 'auras') {
-      <input class="ab" placeholder="技能 ID 过滤（逗号分隔，可空）" [value]="fAbility()" (input)="fAbility.set($any($event.target).value)" />
+      <input class="ab" [placeholder]="fKind() === 'auras' ? '只加载这些技能 ID（逗号分隔，可空）' : '技能 ID 过滤（逗号分隔，可空）'" [value]="fAbility()" (input)="fAbility.set($any($event.target).value)" />
     }
     <button (click)="addColumn()">添加</button>
     @if (columns().length) {
@@ -102,11 +102,18 @@
             }
             @if (v.def.kind === 'auras') {
               <span class="fwrap">
-                <button class="fbtn" [class.on]="filterActive(v.def)" (click)="filterOpen.set(filterOpen() === v.def.id ? null : v.def.id)"
+                <button class="fbtn" [class.on]="filterActive(v.def)" (click)="abSearch.set(''); filterOpen.set(filterOpen() === v.def.id ? null : v.def.id)"
                         title="按施加来源和持续时间过滤">过滤 ▾{{ v.hidden ? '（已隐藏 ' + v.hidden + '）' : '' }}</button>
                 @if (filterOpen() === v.def.id) {
                   <div class="pmask" (click)="filterOpen.set(null)"></div>
                   <div class="ppanel fpanel">
+                    <div class="fsec">加载范围</div>
+                    <div class="frow">技能 ID
+                      <input class="fids" placeholder="留空 = 全部" [value]="v.def.ability"
+                             (change)="setLoadIds(v.def.id, $any($event.target).value)" />
+                    </div>
+                    <div class="fhint">只向服务器请求这些技能（逗号分隔），修改后会重新加载本列；范围大的列（如所有友方）建议填写以节省配额。</div>
+                    <div class="fsec">显示</div>
                     <div class="frow">只显示少于
                       <input type="number" min="0" step="1" class="fdur" placeholder="不限" [value]="v.def.maxDur ?? ''"
                              (change)="setMaxDur(v.def.id, $any($event.target).value)" /> 秒
@@ -130,6 +137,20 @@
                       }
                     }
                     @if (!v.sources.length) { <div class="pempty">没有来源数据</div> }
+                    <div class="pgroup">光环（{{ v.abilities.length }}）</div>
+                    <div class="frow">
+                      <input class="fsearch" placeholder="按名字或 ID 筛选…" [value]="abSearch()" (input)="abSearch.set($any($event.target).value)" />
+                      <button (click)="setAbAll(v, true)">{{ abSearch() ? '勾选匹配' : '全部' }}</button>
+                      <button (click)="setAbAll(v, false)">{{ abSearch() ? '取消匹配' : '全不选' }}</button>
+                    </div>
+                    @for (a of listedAbilities(v); track a.id) {
+                      <label class="popt" [title]="'ID ' + a.id">
+                        <input type="checkbox" [checked]="isAbOn(v.def, a.id)" (change)="toggleAb(v, a.id)" />
+                        @if (a.icon) { <img [src]="a.icon" loading="lazy" /> } @else { <i class="noicon"></i> }
+                        <span>{{ a.name }}</span><i class="cnt">{{ a.count }}</i>
+                      </label>
+                    }
+                    @if (!listedAbilities(v).length) { <div class="pempty">没有匹配的光环</div> }
                   </div>
                 }
               </span>
