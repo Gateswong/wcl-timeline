@@ -25,6 +25,8 @@ interface ColumnDef {
   showZero?: boolean;
   /** taken: only events of at least this amount */
   minAmt?: number;
+  /** taken: fold events closer than one row (at the current zoom) into a single row */
+  merge?: boolean;
   /** power columns: only this resource type (undefined = every type as its own line) */
   resType?: number;
   /** the saved unit does not exist in this fight: the column is kept as configured, but nothing is loaded */
@@ -33,7 +35,7 @@ interface ColumnDef {
   note?: string;
 }
 /** Actor-id-free column description: units are referenced by name (`c`, the class, is legacy and ignored). */
-export interface SavedCol { k: Kind; t: string; c?: string; a?: string; u?: 'Buffs' | 'Debuffs'; d?: string; s?: 1; r?: number; x?: number; f?: string[]; b?: number[]; m?: string; z?: 1; n?: number; }
+export interface SavedCol { k: Kind; t: string; c?: string; a?: string; u?: 'Buffs' | 'Debuffs'; d?: string; s?: 1; r?: number; x?: number; f?: string[]; b?: number[]; m?: string; z?: 1; n?: number; g?: 1; }
 
 const b64enc = (o: unknown) => btoa(String.fromCharCode(...new TextEncoder().encode(JSON.stringify(o))))
   .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
@@ -52,7 +54,9 @@ export interface EvRow {
   y: number; h: number; interrupted: boolean; icon?: string; name: string; route: string; time: string; detail: string;
   src: string; lane: number; color?: string;
   /** damage/healing rows: amount label, its css class and detail lines for the tooltip */
-  amt?: string; amtCls?: string; lines?: string[];
+  amts?: { t: string; c: string }[]; lines?: string[];
+  /** several close events folded into one row */
+  merged?: boolean;
 }
 /** A buff/debuff: start dot, end dot and a connecting line, placed in a lane. */
 export interface AuraRow {
@@ -361,6 +365,7 @@ export class App {
       if (d.dhTypes != null) o.m = d.dhTypes;
       if (d.showZero) o.z = 1;
       if (d.minAmt != null) o.n = d.minAmt;
+      if (d.merge) o.g = 1;
     }
     if (d.kind === 'power' && d.resType != null) o.r = d.resType;
     return o;
@@ -387,6 +392,7 @@ export class App {
       def.dhTypes = sc.m;
       def.showZero = !!sc.z;
       def.minAmt = sc.n;
+      def.merge = !!sc.g;
       def.resType = sc.r;
       def.unresolved = unresolved;
       defs.push(def);
@@ -447,6 +453,7 @@ export class App {
     const next = cur.includes(k) ? cur.replace(k, '') : 'dha'.split('').filter(c => c === k || cur.includes(c)).join('');
     this.patchCol(d.id, { dhTypes: next === 'dh' ? undefined : next });
   }
+  toggleMerge(d: ColumnDef) { this.patchCol(d.id, { merge: !d.merge }); }
   toggleZero(d: ColumnDef) { this.patchCol(d.id, { showZero: !d.showZero }); }
   setMinAmt(id: number, value: string) {
     const n = parseFloat(value);
@@ -462,7 +469,7 @@ export class App {
     const multi = def.ids.length > 1 || def.ids.some(id => (this.actorMap().get(id)?.instances ?? 1) > 1);
     const full = (n?: number | null) => Math.round(n ?? 0).toLocaleString('en-US');
     const pct = (x: number, of: number) => (of > 0 ? `${Math.round((x / of) * 100)}%` : '');
-    const rows = kept.map(e => {
+    const one = (e: TakenEvent): EvRow => {
       const ab = e.a != null ? st.abilities[e.a] : undefined;
       const name = ab?.name ?? (e.a != null ? `#${e.a}` : '未知技能');
       const src = this.unitName(e.src, e.si) || '未知来源';
@@ -490,10 +497,60 @@ export class App {
       lines.push(`技能 ID ${e.a ?? '—'}`);
       return {
         y: this.px(e.t), h: 0, interrupted: false, icon: iconUrl(ab?.icon), name, route, time: fmtTimeP(e.t), detail: '',
-        src, lane: 0, color: TAKEN_COLOR[e.k], amt, amtCls: 'amt-' + e.k, lines,
+        src, lane: 0, color: TAKEN_COLOR[e.k], amts: [{ t: amt, c: 'amt-' + e.k }], lines,
       };
-    });
+    };
+    const rows = def.merge ? this.mergeTaken(kept, one, st) : kept.map(one);
     return { rows, hidden: all.length - kept.length };
+  }
+
+  /**
+   * Folds events that are closer than one row height (18px at the current zoom) into one row showing the totals
+   * per kind; the tooltip breaks the group down by ability and lists the main sources.
+   */
+  private mergeTaken(evs: TakenEvent[], one: (e: TakenEvent) => EvRow, st: ColState): EvRow[] {
+    const win = (18 / this.zoom()) * 1000;
+    const SIGN: Record<string, string> = { d: '-', h: '+', a: '🛡' };
+    const LABEL: Record<string, string> = { d: '伤害', h: '治疗', a: '护盾吸收' };
+    const abName = (a?: number | null) => (a != null ? st.abilities[a]?.name ?? `#${a}` : '未知技能');
+    const full = (n: number) => Math.round(n).toLocaleString('en-US');
+    const out: EvRow[] = [];
+    for (let i = 0; i < evs.length;) {
+      let j = i + 1;
+      while (j < evs.length && evs[j].t - evs[i].t < win) j++;
+      const g = evs.slice(i, j);
+      i = j;
+      if (g.length === 1) { out.push(one(g[0])); continue; }
+      const sum: Record<string, number> = { d: 0, h: 0, a: 0 }, cnt: Record<string, number> = { d: 0, h: 0, a: 0 };
+      const byAb = new Map<string, { k: string; a?: number | null; n: number; total: number }>();
+      const srcs = new Map<string, number>();
+      for (const e of g) {
+        sum[e.k] += e.amt; cnt[e.k]++;
+        const key = `${e.k}:${e.a}`;
+        const o = byAb.get(key) ?? { k: e.k, a: e.a, n: 0, total: 0 };
+        o.n++; o.total += e.amt; byAb.set(key, o);
+        const s = this.unitName(e.src, e.si) || '未知来源';
+        srcs.set(s, (srcs.get(s) ?? 0) + 1);
+      }
+      const abs = [...byAb.values()].sort((x, y) => y.total - x.total || y.n - x.n);
+      const kinds = ['d', 'h', 'a'].filter(k => cnt[k]);
+      const main = kinds.reduce((m, k) => (sum[k] > sum[m] ? k : m), kinds[0]);
+      const topSrc = [...srcs].sort((x, y) => y[1] - x[1]);
+      out.push({
+        y: this.px(g[0].t), h: 0, interrupted: false, icon: iconUrl(abs[0].a != null ? st.abilities[abs[0].a]?.icon : undefined),
+        name: abName(abs[0].a) + (abs.length > 1 ? ` 等 ${abs.length} 项` : ''), route: `${g.length} 个事件`,
+        time: fmtTimeP(g[0].t), detail: '', src: '', lane: 0, color: TAKEN_COLOR[main], merged: true,
+        amts: kinds.map(k => ({ t: `${SIGN[k]}${shortNum(sum[k])}`, c: 'amt-' + k })),
+        lines: [
+          `${fmtTimeP(g[0].t)} – ${fmtTimeP(g[g.length - 1].t)} · 共 ${g.length} 个事件`,
+          ...kinds.map(k => `${LABEL[k]}合计 ${full(sum[k])}（${cnt[k]} 次）`),
+          ...abs.slice(0, 8).map(x => `${SIGN[x.k]}${shortNum(x.total)}  ${abName(x.a)}${x.n > 1 ? ' ×' + x.n : ''}`),
+          ...(abs.length > 8 ? [`…另有 ${abs.length - 8} 种技能`] : []),
+          `来源：${topSrc.slice(0, 4).map(s => s[0]).join('、')}${topSrc.length > 4 ? ' 等' : ''}`,
+        ],
+      });
+    }
+    return out;
   }
 
   filterActive(d: ColumnDef) { return d.maxDur != null || !!d.srcFilter || !!d.abFilter || !!d.ability; }

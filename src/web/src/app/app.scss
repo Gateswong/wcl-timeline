@@ -133,3 +133,6 @@ label.popt { input { margin: 0; } .cnt { margin-left: auto; font-style: normal; 
 .amt-d { color: #ff8a80; } .amt-h { color: #81c784; } .amt-a { color: #81d4fa; }
 .vrow .amt { margin-left: 0; pointer-events: auto; }
 .tip .dl { color: var(--fg); font-size: 11px; }
+
+.vrow.merged .dot { width: 10px; height: 10px; margin-left: -1px; box-shadow: 0 0 0 2px #ffffff30; }
+.vrow .amt + .amt { margin-left: 2px; }

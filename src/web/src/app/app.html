@@ -101,6 +101,9 @@
               </select>
             }
             @if (v.def.kind === 'taken') {
+              <label class="stag" title="按当前缩放，把间隔不到一行高度的事件合并成一行（显示合计），悬停可看明细">
+                <input type="checkbox" [checked]="!!v.def.merge" (change)="toggleMerge(v.def)" />合并相近
+              </label>
               <span class="fwrap">
                 <button class="fbtn" [class.on]="takenFilterActive(v.def)" (click)="filterOpen.set(filterOpen() === v.def.id ? null : v.def.id)"
                         title="按类型和数值过滤">过滤 ▾{{ v.hidden ? '（已隐藏 ' + v.hidden + '）' : '' }}</button>
@@ -252,11 +255,11 @@
                   }
                 }
                 @for (r of v.rows; track $index) {
-                  <div class="vrow" [class.dim]="dimmed(v.def.id, r.lane, v.def.stagger)" [style.top.px]="r.y - 9" [style.paddingLeft.px]="r.lane * 14"
+                  <div class="vrow" [class.merged]="!!r.merged" [class.dim]="dimmed(v.def.id, r.lane, v.def.stagger)" [style.top.px]="r.y - 9" [style.paddingLeft.px]="r.lane * 14"
                        (mouseenter)="showCast(v, r); setFocus(v.def.id, r.lane)" (mouseleave)="hideTip()">
                     <i class="dot" [style.background]="r.interrupted ? '#ff4d4d' : r.color"></i>
                     @if (r.icon) { <img [src]="r.icon" loading="lazy" /> } @else { <i class="noicon"></i> }
-                    @if (r.amt) { <span [class]="'amt ' + r.amtCls">{{ r.amt }}</span> }
+                    @for (m of r.amts ?? []; track $index) { <span [class]="'amt ' + m.c">{{ m.t }}</span> }
                     <span class="nm">{{ r.name }}</span>
                     @if (r.route) { <span class="rt">{{ r.route }}</span> }
                   </div>
@@ -316,7 +319,7 @@
           <div class="tcast" [class.int]="c.interrupted">
             @if (c.icon) { <img [src]="c.icon" /> }
             <div>
-              <div><b>{{ c.name }}</b>@if (c.amt) { <span [class]="'amt ' + c.amtCls">{{ c.amt }}</span> } <span class="muted">{{ c.time }}</span></div>
+              <div><b>{{ c.name }}</b>@for (m of c.amts ?? []; track $index) { <span [class]="'amt ' + m.c">{{ m.t }}</span> } <span class="muted">{{ c.time }}</span></div>
               @if (c.route || c.src) { <div class="muted">{{ c.route || c.src }}</div> }
               @if (c.detail) { <div class="det">{{ c.detail }}</div> }
               @for (l of c.lines ?? []; track $index) { <div class="dl">{{ l }}</div> }
