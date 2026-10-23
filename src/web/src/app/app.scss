@@ -128,3 +128,8 @@ label.popt { input { margin: 0; } .cnt { margin-left: auto; font-style: normal; 
 .fids { flex: 1; min-width: 120px; }
 .fsearch { flex: 1; min-width: 120px; font-size: 12px; }
 .fpanel .frow button { font-size: 11px; padding: 1px 6px; }
+
+.amt { font-weight: 700; font-variant-numeric: tabular-nums; margin-left: 4px; }
+.amt-d { color: #ff8a80; } .amt-h { color: #81c784; } .amt-a { color: #81d4fa; }
+.vrow .amt { margin-left: 0; pointer-events: auto; }
+.tip .dl { color: var(--fg); font-size: 11px; }

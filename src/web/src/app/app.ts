@@ -1,10 +1,10 @@
 import { Component, computed, signal } from '@angular/core';
 import {
-  AbilityMap, Actor, Api, AurasResult, FightDetail, FightSummary, HealthSeries, LogEvent, ReportSummary, Span,
+  AbilityMap, Actor, Api, TakenEvent, AurasResult, FightDetail, FightSummary, HealthSeries, LogEvent, ReportSummary, Span,
   fmtTime, fmtTimeP, iconUrl, parseReportUrl, setFetchedListener, specIconUrl,
 } from './api';
 
-type Kind = 'casts' | 'auras' | 'health' | 'power' | 'events';
+type Kind = 'casts' | 'auras' | 'health' | 'power' | 'events' | 'taken';
 type Hostility = 'Friendlies' | 'Enemies' | 'Both';
 
 interface ColumnDef {
@@ -19,6 +19,12 @@ interface ColumnDef {
   srcFilter?: string[];
   /** auras: ability ids to show among the loaded ones (client side); undefined = all */
   abFilter?: number[];
+  /** taken: which kinds to show (d damage, h heals, a shield absorbs); undefined = 'dh' */
+  dhTypes?: string;
+  /** taken: also show heals that were completely overhealing (0 effective) */
+  showZero?: boolean;
+  /** taken: only events of at least this amount */
+  minAmt?: number;
   /** power columns: only this resource type (undefined = every type as its own line) */
   resType?: number;
   /** the saved unit does not exist in this fight: the column is kept as configured, but nothing is loaded */
@@ -27,7 +33,7 @@ interface ColumnDef {
   note?: string;
 }
 /** Actor-id-free column description: units are referenced by name (`c`, the class, is legacy and ignored). */
-export interface SavedCol { k: Kind; t: string; c?: string; a?: string; u?: 'Buffs' | 'Debuffs'; d?: string; s?: 1; r?: number; x?: number; f?: string[]; b?: number[]; }
+export interface SavedCol { k: Kind; t: string; c?: string; a?: string; u?: 'Buffs' | 'Debuffs'; d?: string; s?: 1; r?: number; x?: number; f?: string[]; b?: number[]; m?: string; z?: 1; n?: number; }
 
 const b64enc = (o: unknown) => btoa(String.fromCharCode(...new TextEncoder().encode(JSON.stringify(o))))
   .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
@@ -37,7 +43,7 @@ const b64dec = <T>(s: string): T => {
 };
 interface ColState {
   loading: boolean; error?: string;
-  events?: LogEvent[]; spans?: Span[]; series?: HealthSeries[]; abilities: AbilityMap;
+  events?: LogEvent[]; spans?: Span[]; series?: HealthSeries[]; taken?: TakenEvent[]; abilities: AbilityMap;
 }
 interface TargetOption { key: string; label: string; ids: number[]; enemy: boolean; group: string; cls?: string; icon?: string; }
 
@@ -45,6 +51,8 @@ interface TargetOption { key: string; label: string; ids: number[]; enemy: boole
 export interface EvRow {
   y: number; h: number; interrupted: boolean; icon?: string; name: string; route: string; time: string; detail: string;
   src: string; lane: number; color?: string;
+  /** damage/healing rows: amount label, its css class and detail lines for the tooltip */
+  amt?: string; amtCls?: string; lines?: string[];
 }
 /** A buff/debuff: start dot, end dot and a connecting line, placed in a lane. */
 export interface AuraRow {
@@ -89,12 +97,16 @@ const RES_LABEL: Record<number, string> = {
 const RES_COLOR: Record<number, string> = {
   0: '#4fc3f7', 1: '#e57373', 2: '#ffb74d', 3: '#fff176', 6: '#4db6ac', 8: '#ba68c8', 9: '#ffe082', 13: '#9575cd', 17: '#a5d6a7',
 };
+const HIT_LABEL: Record<number, string> = { 0: '未命中', 2: '暴击', 4: '格挡', 5: '暴击·格挡', 6: '偏斜', 7: '躲闪', 8: '招架', 10: '免疫' };
+const TAKEN_COLOR: Record<string, string> = { d: '#ef5350', h: '#66bb6a', a: '#4fc3f7' };
+/** 1234 -> 1.2k, 2345678 -> 2.35M */
+const shortNum = (n: number) => (n >= 1e6 ? `${(n / 1e6).toFixed(2)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : `${Math.round(n)}`);
 const TYPE_LABEL: Record<string, string> = {
   death: '死亡', summon: '召唤', interrupt: '打断', dispel: '驱散', resurrect: '复活',
 };
 const PALETTE = ['#4fc3f7', '#ffb74d', '#81c784', '#e57373', '#ba68c8', '#fff176', '#4db6ac', '#f06292', '#a1887f', '#90a4ae'];
 const KIND_LABEL: Record<Kind, string> = {
-  casts: '施法序列', auras: 'Buff / Debuff', health: '血量 %', power: '能量/资源', events: '其他事件',
+  casts: '施法序列', auras: 'Buff / Debuff', health: '血量 %', power: '能量/资源', events: '其他事件', taken: '受到伤害/治疗',
 };
 const EVENT_TYPES: [string, string][] = [
   ['Deaths', '死亡'], ['Summons', '召唤'], ['Interrupts', '打断'], ['Dispels', '驱散'], ['Resurrects', '复活'],
@@ -286,7 +298,7 @@ export class App {
     const opt = this.targetOptions().find(o => o.key === this.fTarget());
     if (!opt) return null;
     const kind = this.fKind();
-    if ((kind === 'casts' || kind === 'health' || kind === 'power') && !opt.ids.length) {
+    if ((kind === 'casts' || kind === 'health' || kind === 'power' || kind === 'taken') && !opt.ids.length) {
       this.error.set('该列类型需要选择具体单位'); return null;
     }
     this.error.set('');
@@ -345,6 +357,11 @@ export class App {
       if (d.srcFilter) o.f = d.srcFilter;
       if (d.abFilter) o.b = d.abFilter;
     }
+    if (d.kind === 'taken') {
+      if (d.dhTypes != null) o.m = d.dhTypes;
+      if (d.showZero) o.z = 1;
+      if (d.minAmt != null) o.n = d.minAmt;
+    }
     if (d.kind === 'power' && d.resType != null) o.r = d.resType;
     return o;
   }
@@ -367,6 +384,9 @@ export class App {
       def.maxDur = sc.x;
       def.srcFilter = sc.f;
       def.abFilter = sc.b;
+      def.dhTypes = sc.m;
+      def.showZero = !!sc.z;
+      def.minAmt = sc.n;
       def.resType = sc.r;
       def.unresolved = unresolved;
       defs.push(def);
@@ -419,6 +439,63 @@ export class App {
   // ---------- aura filter panel ----------
 
   filterOpen = signal<number | null>(null);
+  // ---------- damage / healing taken ----------
+
+  takenTypes(d: ColumnDef) { return d.dhTypes ?? 'dh'; }
+  toggleTakenType(d: ColumnDef, k: string) {
+    const cur = this.takenTypes(d);
+    const next = cur.includes(k) ? cur.replace(k, '') : 'dha'.split('').filter(c => c === k || cur.includes(c)).join('');
+    this.patchCol(d.id, { dhTypes: next === 'dh' ? undefined : next });
+  }
+  toggleZero(d: ColumnDef) { this.patchCol(d.id, { showZero: !d.showZero }); }
+  setMinAmt(id: number, value: string) {
+    const n = parseFloat(value);
+    this.patchCol(id, { minAmt: Number.isFinite(n) && n > 0 ? n : undefined });
+  }
+  takenFilterActive(d: ColumnDef) { return d.dhTypes != null || !!d.showZero || d.minAmt != null; }
+
+  private takenRows(def: ColumnDef, st: ColState): { rows: EvRow[]; hidden: number } {
+    const all = st.taken ?? [];
+    const types = this.takenTypes(def);
+    const kept = all.filter(e => types.includes(e.k) && (def.showZero || e.k !== 'h' || e.amt > 0)
+      && (def.minAmt == null || e.amt + (e.k === 'd' ? e.abs ?? 0 : 0) >= def.minAmt));
+    const multi = def.ids.length > 1 || def.ids.some(id => (this.actorMap().get(id)?.instances ?? 1) > 1);
+    const full = (n?: number | null) => Math.round(n ?? 0).toLocaleString('en-US');
+    const pct = (x: number, of: number) => (of > 0 ? `${Math.round((x / of) * 100)}%` : '');
+    const rows = kept.map(e => {
+      const ab = e.a != null ? st.abilities[e.a] : undefined;
+      const name = ab?.name ?? (e.a != null ? `#${e.a}` : '未知技能');
+      const src = this.unitName(e.src, e.si) || '未知来源';
+      const route = `来自 ${src}` + (multi ? ` → ${this.unitName(e.tgt, e.ti)}` : '');
+      const hit = HIT_LABEL[e.hit ?? 1] ?? '';
+      const lines: string[] = [];
+      let amt: string;
+      if (e.k === 'd') {
+        amt = `-${shortNum(e.amt)}${!e.amt && e.abs ? '（全吸收）' : ''}`;
+        lines.push(`伤害 ${full(e.amt)}${hit ? '（' + hit + '）' : ''}${e.tick ? ' · 周期' : ''}`);
+        if (e.raw) lines.push(`原始 ${full(e.raw)} · 减免 ${full(e.mit)}（${pct(e.mit ?? 0, e.raw)}）`);
+        if (e.abs) lines.push(`被护盾吸收 ${full(e.abs)}`);
+        if (e.over) lines.push(`溢出（超杀）${full(e.over)}`);
+      } else if (e.k === 'h') {
+        amt = `+${shortNum(e.amt)}`;
+        lines.push(`治疗 ${full(e.amt)}${hit ? '（' + hit + '）' : ''}${e.tick ? ' · 周期' : ''}`);
+        if (e.over) lines.push(`过量治疗 ${full(e.over)}（${pct(e.over, e.amt + e.over)}）`);
+        if (e.abs) lines.push(`被治疗吸收 ${full(e.abs)}`);
+      } else {
+        amt = `🛡${shortNum(e.amt)}`;
+        lines.push(`护盾吸收 ${full(e.amt)}`);
+        const xa = e.xa != null ? st.abilities[e.xa]?.name ?? `#${e.xa}` : '';
+        if (xa || e.atk != null) lines.push(`抵挡了 ${this.unitName(e.atk) || '未知'}${xa ? ' 的 ' + xa : ''}`);
+      }
+      lines.push(`技能 ID ${e.a ?? '—'}`);
+      return {
+        y: this.px(e.t), h: 0, interrupted: false, icon: iconUrl(ab?.icon), name, route, time: fmtTimeP(e.t), detail: '',
+        src, lane: 0, color: TAKEN_COLOR[e.k], amt, amtCls: 'amt-' + e.k, lines,
+      };
+    });
+    return { rows, hidden: all.length - kept.length };
+  }
+
   filterActive(d: ColumnDef) { return d.maxDur != null || !!d.srcFilter || !!d.abFilter || !!d.ability; }
   abSearch = signal('');
   isSrcOn(d: ColumnDef, key: string) { return !d.srcFilter || d.srcFilter.includes(key); }
@@ -549,6 +626,11 @@ export class App {
         const events = results.flatMap(r => r.events).sort((a, b) => a.t - b.t);
         results.forEach(r => Object.assign(abilities, r.abilities));
         this.setState(def.id, { loading: false, events, abilities });
+      } else if (def.kind === 'taken') {
+        const results = await Promise.all(def.ids.map(id => Api.taken(code, fight, id)));
+        const taken = results.flatMap(r => r.events).sort((a, b) => a.t - b.t);
+        results.forEach(r => Object.assign(abilities, r.abilities));
+        this.setState(def.id, { loading: false, taken, abilities });
       } else if (def.kind === 'auras') {
         const ids: (number | undefined)[] = def.ids.length ? def.ids : [undefined];
         const results: AurasResult[] = await Promise.all(ids.map(id => Api.auras(code, fight, {
@@ -631,6 +713,10 @@ export class App {
     const base: ColView = { def, state, width: PLOT_W, rows: [], auras: [], lanes: 0, laneIdx: [], laneColors: [], lines: [], marks: [], hidden: 0, resTypes: [], sources: [], abilities: [] };
     if (state.loading || state.error) return { ...base, width: def.kind === 'casts' || def.kind === 'events' ? LIST_W : PLOT_W };
     switch (def.kind) {
+      case 'taken': {
+        const { rows, hidden } = this.takenRows(def, state);
+        return { ...base, width: LIST_W + 40, rows, hidden, laneIdx: [0] };
+      }
       case 'casts': case 'events': {
         const { rows, lanes } = this.eventRows(def, state);
         const laneIdx = Array.from({ length: lanes }, (_, i) => i);

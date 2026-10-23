@@ -100,6 +100,28 @@
                 @for (rt of v.resTypes; track rt) { <option [value]="rt" [selected]="v.def.resType === rt">{{ resLabel(rt) }}</option> }
               </select>
             }
+            @if (v.def.kind === 'taken') {
+              <span class="fwrap">
+                <button class="fbtn" [class.on]="takenFilterActive(v.def)" (click)="filterOpen.set(filterOpen() === v.def.id ? null : v.def.id)"
+                        title="按类型和数值过滤">过滤 ▾{{ v.hidden ? '（已隐藏 ' + v.hidden + '）' : '' }}</button>
+                @if (filterOpen() === v.def.id) {
+                  <div class="pmask" (click)="filterOpen.set(null)"></div>
+                  <div class="ppanel fpanel">
+                    <div class="fsec">类型</div>
+                    <label class="popt"><input type="checkbox" [checked]="takenTypes(v.def).includes('d')" (change)="toggleTakenType(v.def, 'd')" /><span class="amt amt-d">伤害</span></label>
+                    <label class="popt"><input type="checkbox" [checked]="takenTypes(v.def).includes('h')" (change)="toggleTakenType(v.def, 'h')" /><span class="amt amt-h">治疗</span></label>
+                    <label class="popt"><input type="checkbox" [checked]="takenTypes(v.def).includes('a')" (change)="toggleTakenType(v.def, 'a')" /><span class="amt amt-a">护盾吸收</span><i class="cnt">与伤害里的“被吸收”重复，默认不显示</i></label>
+                    <label class="popt"><input type="checkbox" [checked]="!!v.def.showZero" (change)="toggleZero(v.def)" /><span>显示完全过量的治疗（有效治疗为 0）</span></label>
+                    <div class="fsec">数值</div>
+                    <div class="frow">只显示不少于
+                      <input type="number" min="0" step="1000" class="fdur" placeholder="不限" [value]="v.def.minAmt ?? ''"
+                             (change)="setMinAmt(v.def.id, $any($event.target).value)" /> 点
+                    </div>
+                    <div class="fhint">伤害按“实际伤害 + 被吸收”计算。</div>
+                  </div>
+                }
+              </span>
+            }
             @if (v.def.kind === 'auras') {
               <span class="fwrap">
                 <button class="fbtn" [class.on]="filterActive(v.def)" (click)="abSearch.set(''); filterOpen.set(filterOpen() === v.def.id ? null : v.def.id)"
@@ -209,7 +231,7 @@
 
             <div class="shift">
               @if (!anywhere(v) && (v.def.stagger || v.def.kind === 'auras')) { <div class="cbg" (mouseenter)="clearSoon(v.def.id)"></div> }
-              @if (v.def.kind === 'casts' || v.def.kind === 'events') {
+              @if (v.def.kind === 'casts' || v.def.kind === 'events' || v.def.kind === 'taken') {
                 @if (v.def.stagger) {
                   @for (i of v.laneIdx; track i) {
                     <div class="vline" [style.left.px]="i * 14 + 9" [style.background]="v.laneColors[i]" style="top: -28px"
@@ -234,6 +256,7 @@
                        (mouseenter)="showCast(v, r); setFocus(v.def.id, r.lane)" (mouseleave)="hideTip()">
                     <i class="dot" [style.background]="r.interrupted ? '#ff4d4d' : r.color"></i>
                     @if (r.icon) { <img [src]="r.icon" loading="lazy" /> } @else { <i class="noicon"></i> }
+                    @if (r.amt) { <span [class]="'amt ' + r.amtCls">{{ r.amt }}</span> }
                     <span class="nm">{{ r.name }}</span>
                     @if (r.route) { <span class="rt">{{ r.route }}</span> }
                   </div>
@@ -293,9 +316,10 @@
           <div class="tcast" [class.int]="c.interrupted">
             @if (c.icon) { <img [src]="c.icon" /> }
             <div>
-              <div><b>{{ c.name }}</b> <span class="muted">{{ c.time }}</span></div>
+              <div><b>{{ c.name }}</b>@if (c.amt) { <span [class]="'amt ' + c.amtCls">{{ c.amt }}</span> } <span class="muted">{{ c.time }}</span></div>
               @if (c.route || c.src) { <div class="muted">{{ c.route || c.src }}</div> }
               @if (c.detail) { <div class="det">{{ c.detail }}</div> }
+              @for (l of c.lines ?? []; track $index) { <div class="dl">{{ l }}</div> }
             </div>
           </div>
         }

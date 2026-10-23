@@ -30,6 +30,15 @@ export interface Span {
   /** who applied it (latest apply/refresh) and that unit's instance */
   src?: number | null; si?: number;
 }
+/** Damage (k=d), heal (k=h) or shield absorb (k=a) received by a unit, with WCL's raw numbers. */
+export interface TakenEvent {
+  t: number; k: 'd' | 'h' | 'a'; src?: number | null; si?: number; tgt?: number | null; ti?: number; a?: number | null;
+  amt: number; raw?: number | null; mit?: number | null; abs?: number | null; over?: number | null;
+  hit?: number | null; tick?: boolean;
+  /** absorbs: the damage ability that was absorbed and who dealt it */
+  xa?: number | null; atk?: number | null;
+}
+export interface TakenResult { events: TakenEvent[]; abilities: AbilityMap; }
 export interface AurasResult { spans: Span[]; abilities: AbilityMap; }
 export interface HealthSeries { id: number; inst?: number; points: [number, number, number, number][]; }
 
@@ -69,6 +78,8 @@ export const Api = {
     get<EventsResult>(`api/report/${code}/fight/${fight}/events?${q(p)}`),
   auras: (code: string, fight: number, p: { type: string; target?: number; ability?: string; hostility?: string }) =>
     get<AurasResult>(`api/report/${code}/fight/${fight}/auras?${q(p)}`),
+  taken: (code: string, fight: number, target: number) =>
+    get<TakenResult>(`api/report/${code}/fight/${fight}/taken?target=${target}`),
   health: (code: string, fight: number, targets: number[], hostility: string) =>
     get<{ series: HealthSeries[] }>(`api/report/${code}/fight/${fight}/health?${q({ targets: targets.join(','), hostility })}`),
 };

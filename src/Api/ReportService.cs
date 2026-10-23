@@ -378,6 +378,57 @@ public class ReportService(WclClient wcl)
         return new { spans, abilities = await AbilitySubset(code, used) };
     }
 
+    /// <summary>
+    /// Damage and healing a unit received: damage (k=d), heals (k=h) and shield absorbs (k=a), with the raw numbers
+    /// WCL provides (unmitigated, mitigated, absorbed, overkill/overheal, hit type, tick).
+    /// </summary>
+    public async Task<object> GetTakenAsync(string code, int fightId, int target)
+    {
+        var fi = await GetFightInfoAsync(code, fightId);
+        // DamageTaken swaps roles (sourceID filters the victim); Healing filters the healed unit by targetID.
+        var dmgTask = FetchBothAsync(code, fi, "DamageTaken", target, null, null);
+        var healTask = FetchBothAsync(code, fi, "Healing", null, target, null);
+        await Task.WhenAll(dmgTask, healTask);
+
+        var used = new HashSet<int>();
+        var list = new List<(double t, object item)>();
+        static double? D(JsonNode e, string k) => e[k]?.GetValue<double>();
+        void Add(JsonNode e, string k)
+        {
+            var a = Int(e["abilityGameID"]); if (a == 0) a = null;
+            var xa = Int(e["extraAbilityGameID"]); if (xa == 0) xa = null;
+            if (a != null) used.Add(a.Value);
+            if (xa != null) used.Add(xa.Value);
+            var t = Math.Round(e["timestamp"]!.GetValue<double>() - fi.Start);
+            list.Add((t, new
+            {
+                t, k,
+                src = Int(e["sourceID"]), si = Inst(e["sourceInstance"]),
+                tgt = Int(e["targetID"]), ti = Inst(e["targetInstance"]),
+                a,
+                amt = D(e, "amount") ?? 0,
+                raw = D(e, "unmitigatedAmount"),
+                mit = D(e, "mitigated"),
+                abs = D(e, "absorbed"),
+                over = k == "d" ? D(e, "overkill") : D(e, "overheal"),
+                hit = Int(e["hitType"]),
+                tick = e["tick"]?.GetValue<bool>() ?? false,
+                xa,
+                atk = Int(e["attackerID"]),
+            }));
+        }
+        foreach (var e in dmgTask.Result)
+            if (e["type"]?.GetValue<string>() == "damage" && Int(e["targetID"]) == target) Add(e, "d");
+        foreach (var e in healTask.Result)
+        {
+            var ty = e["type"]?.GetValue<string>();
+            if (Int(e["targetID"]) != target) continue;
+            if (ty == "heal") Add(e, "h");
+            else if (ty == "absorbed") Add(e, "a");
+        }
+        return new { events = list.OrderBy(x => x.t).Select(x => x.item).ToList(), abilities = await AbilitySubset(code, used) };
+    }
+
     public async Task<object> GetHealthAsync(string code, int fightId, string targets, string? hostility)
     {
         var fi = await GetFightInfoAsync(code, fightId);
