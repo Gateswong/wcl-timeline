@@ -136,3 +136,12 @@ label.popt { input { margin: 0; } .cnt { margin-left: auto; font-style: normal; 
 
 .vrow.merged .dot { width: 10px; height: 10px; margin-left: -1px; box-shadow: 0 0 0 2px #ffffff30; }
 .vrow .amt + .amt { margin-left: 2px; }
+
+.tip.wide { width: 400px; }
+.tip .tkids { border-top: 1px solid var(--line); margin-top: 4px; padding-top: 4px; }
+.tip .tkid {
+  display: flex; gap: 6px; padding: 2px 0; font-size: 11px; line-height: 1.35;
+  img, .noicon { width: 16px; height: 16px; border-radius: 3px; border: 1px solid #000; flex: none; background: #333; margin-top: 1px; }
+  .amt { margin-left: 4px; margin-right: 2px; }
+  .brief { color: var(--muted); }
+}

@@ -55,8 +55,8 @@ export interface EvRow {
   src: string; lane: number; color?: string;
   /** damage/healing rows: amount label, its css class and detail lines for the tooltip */
   amts?: { t: string; c: string }[]; lines?: string[];
-  /** several close events folded into one row */
-  merged?: boolean;
+  /** several close events folded into one row; children = the single events, brief = compact detail line */
+  merged?: boolean; children?: EvRow[]; brief?: string;
 }
 /** A buff/debuff: start dot, end dot and a connecting line, placed in a lane. */
 export interface AuraRow {
@@ -495,7 +495,16 @@ export class App {
         if (xa || e.atk != null) lines.push(`抵挡了 ${this.unitName(e.atk) || '未知'}${xa ? ' 的 ' + xa : ''}`);
       }
       lines.push(`技能 ID ${e.a ?? '—'}`);
+      // compact detail for the per-event list of merged rows
+      const sh = (n?: number | null) => shortNum(n ?? 0);
+      const brief = (e.k === 'd'
+        ? [hit, e.tick ? '周期' : '', e.raw ? `原始 ${sh(e.raw)}` : '', e.raw && e.mit ? `减免 ${pct(e.mit, e.raw)}` : '',
+           e.abs ? `吸收 ${sh(e.abs)}` : '', e.over ? `超杀 ${sh(e.over)}` : '']
+        : e.k === 'h'
+          ? [hit, e.tick ? '周期' : '', e.over ? `过量 ${sh(e.over)}（${pct(e.over, e.amt + e.over)}）` : '', e.abs ? `被吸收 ${sh(e.abs)}` : '']
+          : [lines[1] ?? '']).filter(Boolean).join(' · ');
       return {
+        brief,
         y: this.px(e.t), h: 0, interrupted: false, icon: iconUrl(ab?.icon), name, route, time: fmtTimeP(e.t), detail: '',
         src, lane: 0, color: TAKEN_COLOR[e.k], amts: [{ t: amt, c: 'amt-' + e.k }], lines,
       };
@@ -506,7 +515,7 @@ export class App {
 
   /**
    * Folds events that are closer than one row height (18px at the current zoom) into one row showing the totals
-   * per kind; the tooltip breaks the group down by ability and lists the main sources.
+   * per kind; the tooltip lists every event of the group (amount, ability, source, mitigation/absorbs).
    */
   private mergeTaken(evs: TakenEvent[], one: (e: TakenEvent) => EvRow, st: ColState): EvRow[] {
     const win = (18 / this.zoom()) * 1000;
@@ -539,13 +548,11 @@ export class App {
       out.push({
         y: this.px(g[0].t), h: 0, interrupted: false, icon: iconUrl(abs[0].a != null ? st.abilities[abs[0].a]?.icon : undefined),
         name: abName(abs[0].a) + (abs.length > 1 ? ` 等 ${abs.length} 项` : ''), route: `${g.length} 个事件`,
-        time: fmtTimeP(g[0].t), detail: '', src: '', lane: 0, color: TAKEN_COLOR[main], merged: true,
+        time: fmtTimeP(g[0].t), detail: '', src: '', lane: 0, color: TAKEN_COLOR[main], merged: true, children: g.map(one),
         amts: kinds.map(k => ({ t: `${SIGN[k]}${shortNum(sum[k])}`, c: 'amt-' + k })),
         lines: [
           `${fmtTimeP(g[0].t)} – ${fmtTimeP(g[g.length - 1].t)} · 共 ${g.length} 个事件`,
           ...kinds.map(k => `${LABEL[k]}合计 ${full(sum[k])}（${cnt[k]} 次）`),
-          ...abs.slice(0, 8).map(x => `${SIGN[x.k]}${shortNum(x.total)}  ${abName(x.a)}${x.n > 1 ? ' ×' + x.n : ''}`),
-          ...(abs.length > 8 ? [`…另有 ${abs.length - 8} 种技能`] : []),
           `来源：${topSrc.slice(0, 4).map(s => s[0]).join('、')}${topSrc.length > 4 ? ' 等' : ''}`,
         ],
       });
