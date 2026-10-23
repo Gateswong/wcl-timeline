@@ -382,12 +382,12 @@ public class ReportService(WclClient wcl)
     /// Damage and healing a unit received: damage (k=d), heals (k=h) and shield absorbs (k=a), with the raw numbers
     /// WCL provides (unmitigated, mitigated, absorbed, overkill/overheal, hit type, tick).
     /// </summary>
-    public async Task<object> GetTakenAsync(string code, int fightId, int target)
+    public async Task<object> GetTakenAsync(string code, int fightId, int target, string? ability)
     {
         var fi = await GetFightInfoAsync(code, fightId);
         // DamageTaken swaps roles (sourceID filters the victim); Healing filters the healed unit by targetID.
-        var dmgTask = FetchBothAsync(code, fi, "DamageTaken", target, null, null);
-        var healTask = FetchBothAsync(code, fi, "Healing", null, target, null);
+        var dmgTask = FetchBothAsync(code, fi, "DamageTaken", target, null, ability);
+        var healTask = FetchBothAsync(code, fi, "Healing", null, target, ability);
         await Task.WhenAll(dmgTask, healTask);
 
         var used = new HashSet<int>();

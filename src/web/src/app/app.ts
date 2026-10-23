@@ -366,6 +366,7 @@ export class App {
       if (d.showZero) o.z = 1;
       if (d.minAmt != null) o.n = d.minAmt;
       if (d.merge) o.g = 1;
+      if (d.abFilter) o.b = d.abFilter;
     }
     if (d.kind === 'power' && d.resType != null) o.r = d.resType;
     return o;
@@ -459,12 +460,26 @@ export class App {
     const n = parseFloat(value);
     this.patchCol(id, { minAmt: Number.isFinite(n) && n > 0 ? n : undefined });
   }
-  takenFilterActive(d: ColumnDef) { return d.dhTypes != null || !!d.showZero || d.minAmt != null; }
+  takenFilterActive(d: ColumnDef) {
+    return d.dhTypes != null || !!d.showZero || d.minAmt != null || !!d.abFilter || !!d.ability;
+  }
+  private takenAbilities(st: ColState): AbOpt[] {
+    const by = new Map<number, AbOpt>();
+    for (const e of st.taken ?? []) {
+      if (e.a == null) continue;
+      const o = by.get(e.a);
+      if (o) { o.count++; continue; }
+      const ab = st.abilities[e.a];
+      by.set(e.a, { id: e.a, name: ab?.name ?? `#${e.a}`, icon: iconUrl(ab?.icon), count: 1 });
+    }
+    return [...by.values()].sort((x, y) => y.count - x.count || x.name.localeCompare(y.name));
+  }
 
   private takenRows(def: ColumnDef, st: ColState): { rows: EvRow[]; hidden: number } {
     const all = st.taken ?? [];
     const types = this.takenTypes(def);
     const kept = all.filter(e => types.includes(e.k) && (def.showZero || e.k !== 'h' || e.amt > 0)
+      && (!def.abFilter || (e.a != null && def.abFilter.includes(e.a)))
       && (def.minAmt == null || e.amt + (e.k === 'd' ? e.abs ?? 0 : 0) >= def.minAmt));
     const multi = def.ids.length > 1 || def.ids.some(id => (this.actorMap().get(id)?.instances ?? 1) > 1);
     const full = (n?: number | null) => Math.round(n ?? 0).toLocaleString('en-US');
@@ -691,7 +706,7 @@ export class App {
         results.forEach(r => Object.assign(abilities, r.abilities));
         this.setState(def.id, { loading: false, events, abilities });
       } else if (def.kind === 'taken') {
-        const results = await Promise.all(def.ids.map(id => Api.taken(code, fight, id)));
+        const results = await Promise.all(def.ids.map(id => Api.taken(code, fight, id, def.ability)));
         const taken = results.flatMap(r => r.events).sort((a, b) => a.t - b.t);
         results.forEach(r => Object.assign(abilities, r.abilities));
         this.setState(def.id, { loading: false, taken, abilities });
@@ -779,7 +794,7 @@ export class App {
     switch (def.kind) {
       case 'taken': {
         const { rows, hidden } = this.takenRows(def, state);
-        return { ...base, width: LIST_W + 40, rows, hidden, laneIdx: [0] };
+        return { ...base, width: LIST_W + 40, rows, hidden, laneIdx: [0], abilities: this.takenAbilities(state) };
       }
       case 'casts': case 'events': {
         const { rows, lanes } = this.eventRows(def, state);

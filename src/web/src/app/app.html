@@ -68,7 +68,7 @@
       </select>
     }
     @if (fKind() === 'casts' || fKind() === 'auras') {
-      <input class="ab" [placeholder]="fKind() === 'auras' ? '只加载这些技能 ID（逗号分隔，可空）' : '技能 ID 过滤（逗号分隔，可空）'" [value]="fAbility()" (input)="fAbility.set($any($event.target).value)" />
+      <input class="ab" [placeholder]="fKind() === 'auras' || fKind() === 'taken' ? '只加载这些技能 ID（逗号分隔，可空）' : '技能 ID 过滤（逗号分隔，可空）'" [value]="fAbility()" (input)="fAbility.set($any($event.target).value)" />
     }
     <button (click)="addColumn()">添加</button>
     @if (columns().length) {
@@ -105,11 +105,17 @@
                 <input type="checkbox" [checked]="!!v.def.merge" (change)="toggleMerge(v.def)" />合并相近
               </label>
               <span class="fwrap">
-                <button class="fbtn" [class.on]="takenFilterActive(v.def)" (click)="filterOpen.set(filterOpen() === v.def.id ? null : v.def.id)"
+                <button class="fbtn" [class.on]="takenFilterActive(v.def)" (click)="abSearch.set(''); filterOpen.set(filterOpen() === v.def.id ? null : v.def.id)"
                         title="按类型和数值过滤">过滤 ▾{{ v.hidden ? '（已隐藏 ' + v.hidden + '）' : '' }}</button>
                 @if (filterOpen() === v.def.id) {
                   <div class="pmask" (click)="filterOpen.set(null)"></div>
                   <div class="ppanel fpanel">
+                    <div class="fsec">加载范围</div>
+                    <div class="frow">技能 ID
+                      <input class="fids" placeholder="留空 = 全部" [value]="v.def.ability"
+                             (change)="setLoadIds(v.def.id, $any($event.target).value)" />
+                    </div>
+                    <div class="fhint">只向服务器请求这些技能（逗号分隔），修改后会重新加载本列。护盾吸收按护盾技能的 ID 计。</div>
                     <div class="fsec">类型</div>
                     <label class="popt"><input type="checkbox" [checked]="takenTypes(v.def).includes('d')" (change)="toggleTakenType(v.def, 'd')" /><span class="amt amt-d">伤害</span></label>
                     <label class="popt"><input type="checkbox" [checked]="takenTypes(v.def).includes('h')" (change)="toggleTakenType(v.def, 'h')" /><span class="amt amt-h">治疗</span></label>
@@ -121,6 +127,20 @@
                              (change)="setMinAmt(v.def.id, $any($event.target).value)" /> 点
                     </div>
                     <div class="fhint">伤害按“实际伤害 + 被吸收”计算。</div>
+                    <div class="pgroup">技能（{{ v.abilities.length }}）</div>
+                    <div class="frow">
+                      <input class="fsearch" placeholder="按名字或 ID 筛选…" [value]="abSearch()" (input)="abSearch.set($any($event.target).value)" />
+                      <button (click)="setAbAll(v, true)">{{ abSearch() ? '勾选匹配' : '全部' }}</button>
+                      <button (click)="setAbAll(v, false)">{{ abSearch() ? '取消匹配' : '全不选' }}</button>
+                    </div>
+                    @for (a of listedAbilities(v); track a.id) {
+                      <label class="popt" [title]="'ID ' + a.id">
+                        <input type="checkbox" [checked]="isAbOn(v.def, a.id)" (change)="toggleAb(v, a.id)" />
+                        @if (a.icon) { <img [src]="a.icon" loading="lazy" /> } @else { <i class="noicon"></i> }
+                        <span>{{ a.name }}</span><i class="cnt">{{ a.count }}</i>
+                      </label>
+                    }
+                    @if (!listedAbilities(v).length) { <div class="pempty">没有匹配的技能</div> }
                   </div>
                 }
               </span>
