@@ -68,7 +68,7 @@
       </select>
     }
     @if (fKind() === 'casts' || fKind() === 'auras') {
-      <input class="ab" [placeholder]="fKind() === 'auras' || fKind() === 'taken' ? '只加载这些技能 ID（逗号分隔，可空）' : '技能 ID 过滤（逗号分隔，可空）'" [value]="fAbility()" (input)="fAbility.set($any($event.target).value)" />
+      <input class="ab" [placeholder]="fKind() === 'auras' || isCombat(fKind()) ? '只加载这些技能 ID（逗号分隔，可空）' : '技能 ID 过滤（逗号分隔，可空）'" [value]="fAbility()" (input)="fAbility.set($any($event.target).value)" />
     }
     <button (click)="addColumn()">添加</button>
     @if (columns().length) {
@@ -100,7 +100,7 @@
                 @for (rt of v.resTypes; track rt) { <option [value]="rt" [selected]="v.def.resType === rt">{{ resLabel(rt) }}</option> }
               </select>
             }
-            @if (v.def.kind === 'taken') {
+            @if (isCombat(v.def.kind)) {
               <label class="stag" title="按当前缩放，把间隔不到一行高度的事件合并成一行（显示合计），悬停可看明细">
                 <input type="checkbox" [checked]="!!v.def.merge" (change)="toggleMerge(v.def)" />合并相近
               </label>
@@ -254,7 +254,7 @@
 
             <div class="shift">
               @if (!anywhere(v) && (v.def.stagger || v.def.kind === 'auras')) { <div class="cbg" (mouseenter)="clearSoon(v.def.id)"></div> }
-              @if (v.def.kind === 'casts' || v.def.kind === 'events' || v.def.kind === 'taken') {
+              @if (v.def.kind === 'casts' || v.def.kind === 'events' || isCombat(v.def.kind)) {
                 @if (v.def.stagger) {
                   @for (i of v.laneIdx; track i) {
                     <div class="vline" [style.left.px]="i * 14 + 9" [style.background]="v.laneColors[i]" style="top: -28px"
@@ -354,7 +354,7 @@
                     <div>
                       <span class="muted">{{ k.time }}</span>
                       @for (m of k.amts ?? []; track $index) { <span [class]="'amt ' + m.c">{{ m.t }}</span> }
-                      {{ k.name }} <span class="muted">← {{ k.src }}</span>
+                      {{ k.name }} <span class="muted">{{ k.route }}</span>
                     </div>
                     @if (k.brief) { <div class="brief">{{ k.brief }}</div> }
                   </div>

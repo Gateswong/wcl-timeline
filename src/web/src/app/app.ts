@@ -4,7 +4,7 @@ import {
   fmtTime, fmtTimeP, iconUrl, parseReportUrl, setFetchedListener, specIconUrl,
 } from './api';
 
-type Kind = 'casts' | 'auras' | 'health' | 'power' | 'events' | 'taken';
+type Kind = 'casts' | 'auras' | 'health' | 'power' | 'events' | 'taken' | 'done';
 type Hostility = 'Friendlies' | 'Enemies' | 'Both';
 
 interface ColumnDef {
@@ -104,13 +104,15 @@ const RES_COLOR: Record<number, string> = {
 const HIT_LABEL: Record<number, string> = { 0: '未命中', 2: '暴击', 4: '格挡', 5: '暴击·格挡', 6: '偏斜', 7: '躲闪', 8: '招架', 10: '免疫' };
 const TAKEN_COLOR: Record<string, string> = { d: '#ef5350', h: '#66bb6a', a: '#4fc3f7' };
 /** 1234 -> 1.2k, 2345678 -> 2.35M */
+/** damage/healing columns: received (taken) or dealt (done) */
+const isCombat = (k: Kind) => k === 'taken' || k === 'done';
 const shortNum = (n: number) => (n >= 1e6 ? `${(n / 1e6).toFixed(2)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : `${Math.round(n)}`);
 const TYPE_LABEL: Record<string, string> = {
   death: '死亡', summon: '召唤', interrupt: '打断', dispel: '驱散', resurrect: '复活',
 };
 const PALETTE = ['#4fc3f7', '#ffb74d', '#81c784', '#e57373', '#ba68c8', '#fff176', '#4db6ac', '#f06292', '#a1887f', '#90a4ae'];
 const KIND_LABEL: Record<Kind, string> = {
-  casts: '施法序列', auras: 'Buff / Debuff', health: '血量 %', power: '能量/资源', events: '其他事件', taken: '受到伤害/治疗',
+  casts: '施法序列', auras: 'Buff / Debuff', health: '血量 %', power: '能量/资源', events: '其他事件', taken: '受到伤害/治疗', done: '造成伤害/治疗',
 };
 const EVENT_TYPES: [string, string][] = [
   ['Deaths', '死亡'], ['Summons', '召唤'], ['Interrupts', '打断'], ['Dispels', '驱散'], ['Resurrects', '复活'],
@@ -128,6 +130,7 @@ export class App {
   protected readonly eventTypes = EVENT_TYPES;
   protected readonly fmtTime = fmtTime;
   protected readonly fmtTimeP = fmtTimeP;
+  protected readonly isCombat = isCombat;
   protected readonly pad = PAD;
 
   input = signal('');
@@ -302,7 +305,7 @@ export class App {
     const opt = this.targetOptions().find(o => o.key === this.fTarget());
     if (!opt) return null;
     const kind = this.fKind();
-    if ((kind === 'casts' || kind === 'health' || kind === 'power' || kind === 'taken') && !opt.ids.length) {
+    if ((kind === 'casts' || kind === 'health' || kind === 'power' || isCombat(kind)) && !opt.ids.length) {
       this.error.set('该列类型需要选择具体单位'); return null;
     }
     this.error.set('');
@@ -361,7 +364,7 @@ export class App {
       if (d.srcFilter) o.f = d.srcFilter;
       if (d.abFilter) o.b = d.abFilter;
     }
-    if (d.kind === 'taken') {
+    if (isCombat(d.kind)) {
       if (d.dhTypes != null) o.m = d.dhTypes;
       if (d.showZero) o.z = 1;
       if (d.minAmt != null) o.n = d.minAmt;
@@ -476,6 +479,7 @@ export class App {
   }
 
   private takenRows(def: ColumnDef, st: ColState): { rows: EvRow[]; hidden: number } {
+    const out = def.kind === 'done';
     const all = st.taken ?? [];
     const types = this.takenTypes(def);
     const kept = all.filter(e => types.includes(e.k) && (def.showZero || e.k !== 'h' || e.amt > 0)
@@ -488,14 +492,18 @@ export class App {
       const ab = e.a != null ? st.abilities[e.a] : undefined;
       const name = ab?.name ?? (e.a != null ? `#${e.a}` : '未知技能');
       const src = this.unitName(e.src, e.si) || '未知来源';
-      const route = `来自 ${src}` + (multi ? ` → ${this.unitName(e.tgt, e.ti)}` : '');
+      const tgt = this.unitName(e.tgt, e.ti) || '未知目标';
+      // received: "来自 <source>"; dealt: "→ <target>", prefixed with the pet / unit when it is not the column's own unit
+      const route = out
+        ? `${multi || (e.src != null && !def.ids.includes(e.src)) ? src + ' ' : ''}→ ${tgt}`
+        : `来自 ${src}` + (multi ? ` → ${tgt}` : '');
       const hit = HIT_LABEL[e.hit ?? 1] ?? '';
       const lines: string[] = [];
       let amt: string;
       if (e.k === 'd') {
         amt = `-${shortNum(e.amt)}${!e.amt && e.abs ? '（全吸收）' : ''}`;
         lines.push(`伤害 ${full(e.amt)}${hit ? '（' + hit + '）' : ''}${e.tick ? ' · 周期' : ''}`);
-        if (e.raw) lines.push(`原始 ${full(e.raw)} · 减免 ${full(e.mit)}（${pct(e.mit ?? 0, e.raw)}）`);
+        if (e.raw) lines.push(`原始 ${full(e.raw)}${e.mit ? ` · 减免 ${full(e.mit)}（${pct(e.mit, e.raw)}）` : ''}`);
         if (e.abs) lines.push(`被护盾吸收 ${full(e.abs)}`);
         if (e.over) lines.push(`溢出（超杀）${full(e.over)}`);
       } else if (e.k === 'h') {
@@ -507,7 +515,7 @@ export class App {
         amt = `🛡${shortNum(e.amt)}`;
         lines.push(`护盾吸收 ${full(e.amt)}`);
         const xa = e.xa != null ? st.abilities[e.xa]?.name ?? `#${e.xa}` : '';
-        if (xa || e.atk != null) lines.push(`抵挡了 ${this.unitName(e.atk) || '未知'}${xa ? ' 的 ' + xa : ''}`);
+        if (xa || e.atk != null) lines.push(`${out ? '为 ' + tgt + ' ' : ''}抵挡了 ${this.unitName(e.atk) || '未知'}${xa ? ' 的 ' + xa : ''}`);
       }
       lines.push(`技能 ID ${e.a ?? '—'}`);
       // compact detail for the per-event list of merged rows
@@ -524,7 +532,7 @@ export class App {
         src, lane: 0, color: TAKEN_COLOR[e.k], amts: [{ t: amt, c: 'amt-' + e.k }], lines,
       };
     };
-    const rows = def.merge ? this.mergeTaken(kept, one, st) : kept.map(one);
+    const rows = def.merge ? this.mergeTaken(kept, one, st, out) : kept.map(one);
     return { rows, hidden: all.length - kept.length };
   }
 
@@ -532,7 +540,7 @@ export class App {
    * Folds events that are closer than one row height (18px at the current zoom) into one row showing the totals
    * per kind; the tooltip lists every event of the group (amount, ability, source, mitigation/absorbs).
    */
-  private mergeTaken(evs: TakenEvent[], one: (e: TakenEvent) => EvRow, st: ColState): EvRow[] {
+  private mergeTaken(evs: TakenEvent[], one: (e: TakenEvent) => EvRow, st: ColState, dealt = false): EvRow[] {
     const win = (18 / this.zoom()) * 1000;
     const SIGN: Record<string, string> = { d: '-', h: '+', a: '🛡' };
     const LABEL: Record<string, string> = { d: '伤害', h: '治疗', a: '护盾吸收' };
@@ -553,7 +561,7 @@ export class App {
         const key = `${e.k}:${e.a}`;
         const o = byAb.get(key) ?? { k: e.k, a: e.a, n: 0, total: 0 };
         o.n++; o.total += e.amt; byAb.set(key, o);
-        const s = this.unitName(e.src, e.si) || '未知来源';
+        const s = dealt ? this.unitName(e.tgt, e.ti) || '未知目标' : this.unitName(e.src, e.si) || '未知来源';
         srcs.set(s, (srcs.get(s) ?? 0) + 1);
       }
       const abs = [...byAb.values()].sort((x, y) => y.total - x.total || y.n - x.n);
@@ -568,7 +576,7 @@ export class App {
         lines: [
           `${fmtTimeP(g[0].t)} – ${fmtTimeP(g[g.length - 1].t)} · 共 ${g.length} 个事件`,
           ...kinds.map(k => `${LABEL[k]}合计 ${full(sum[k])}（${cnt[k]} 次）`),
-          `来源：${topSrc.slice(0, 4).map(s => s[0]).join('、')}${topSrc.length > 4 ? ' 等' : ''}`,
+          `${dealt ? '目标' : '来源'}：${topSrc.slice(0, 4).map(s => s[0]).join('、')}${topSrc.length > 4 ? ' 等' : ''}`,
         ],
       });
     }
@@ -705,8 +713,11 @@ export class App {
         const events = results.flatMap(r => r.events).sort((a, b) => a.t - b.t);
         results.forEach(r => Object.assign(abilities, r.abilities));
         this.setState(def.id, { loading: false, events, abilities });
-      } else if (def.kind === 'taken') {
-        const results = await Promise.all(def.ids.map(id => Api.taken(code, fight, id, def.ability)));
+      } else if (isCombat(def.kind)) {
+        // damage/healing dealt also counts the unit's pets (totems, summons, ...)
+        const pets = (id: number) => this.fight()!.actors.filter(a => a.petOwner === id).map(a => a.id);
+        const results = await Promise.all(def.ids.map(id =>
+          def.kind === 'done' ? Api.done(code, fight, id, pets(id), def.ability) : Api.taken(code, fight, id, def.ability)));
         const taken = results.flatMap(r => r.events).sort((a, b) => a.t - b.t);
         results.forEach(r => Object.assign(abilities, r.abilities));
         this.setState(def.id, { loading: false, taken, abilities });
@@ -792,7 +803,7 @@ export class App {
     const base: ColView = { def, state, width: PLOT_W, rows: [], auras: [], lanes: 0, laneIdx: [], laneColors: [], lines: [], marks: [], hidden: 0, resTypes: [], sources: [], abilities: [] };
     if (state.loading || state.error) return { ...base, width: def.kind === 'casts' || def.kind === 'events' ? LIST_W : PLOT_W };
     switch (def.kind) {
-      case 'taken': {
+      case 'taken': case 'done': {
         const { rows, hidden } = this.takenRows(def, state);
         return { ...base, width: LIST_W + 40, rows, hidden, laneIdx: [0], abilities: this.takenAbilities(state) };
       }

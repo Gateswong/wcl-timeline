@@ -80,6 +80,8 @@ export const Api = {
     get<AurasResult>(`api/report/${code}/fight/${fight}/auras?${q(p)}`),
   taken: (code: string, fight: number, target: number, ability?: string) =>
     get<TakenResult>(`api/report/${code}/fight/${fight}/taken?${q({ target, ability })}`),
+  done: (code: string, fight: number, source: number, pets: number[], ability?: string) =>
+    get<TakenResult>(`api/report/${code}/fight/${fight}/done?${q({ source, pets: pets.join(','), ability })}`),
   health: (code: string, fight: number, targets: number[], hostility: string) =>
     get<{ series: HealthSeries[] }>(`api/report/${code}/fight/${fight}/health?${q({ targets: targets.join(','), hostility })}`),
 };

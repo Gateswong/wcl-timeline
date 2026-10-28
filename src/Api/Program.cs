@@ -51,6 +51,10 @@ api.MapGet("/report/{code}/fight/{fightId:int}/auras",
 api.MapGet("/report/{code}/fight/{fightId:int}/taken",
     (string code, int fightId, int target, string? ability, ReportService s) => s.GetTakenAsync(code, fightId, target, ability));
 
+// Damage / healing dealt by one unit and its pets: ?source=1&pets=5,6&ability=123,456
+api.MapGet("/report/{code}/fight/{fightId:int}/done",
+    (string code, int fightId, int source, string? pets, string? ability, ReportService s) => s.GetDoneAsync(code, fightId, source, pets, ability));
+
 // Health % series (1s resolution) for one or more units: ?targets=1,2,3&hostility=Enemies
 api.MapGet("/report/{code}/fight/{fightId:int}/health",
     (string code, int fightId, string targets, string? hostility, ReportService s) =>

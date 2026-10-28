@@ -389,7 +389,29 @@ public class ReportService(WclClient wcl)
         var dmgTask = FetchBothAsync(code, fi, "DamageTaken", target, null, ability);
         var healTask = FetchBothAsync(code, fi, "Healing", null, target, ability);
         await Task.WhenAll(dmgTask, healTask);
+        return await ShapeCombatAsync(code, fi, dmgTask.Result, healTask.Result, e => Int(e["targetID"]) == target);
+    }
 
+    /// <summary>
+    /// Damage and healing a unit dealt (same shape as <see cref="GetTakenAsync"/>), including its pets' (pet ids are
+    /// passed by the UI, which knows the pet owners). Absorbs are the unit's shields soaking damage on others.
+    /// </summary>
+    public async Task<object> GetDoneAsync(string code, int fightId, int source, string? pets, string? ability)
+    {
+        var fi = await GetFightInfoAsync(code, fightId);
+        var ids = new List<int> { source };
+        ids.AddRange((pets ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(int.Parse).Where(i => i != source).Take(30));
+        var dmg = Task.WhenAll(ids.Select(id => FetchBothAsync(code, fi, "DamageDone", id, null, ability)));
+        var heal = Task.WhenAll(ids.Select(id => FetchBothAsync(code, fi, "Healing", id, null, ability)));
+        await Task.WhenAll(dmg, heal);
+        var mine = ids.ToHashSet();
+        return await ShapeCombatAsync(code, fi, dmg.Result.SelectMany(x => x).ToList(), heal.Result.SelectMany(x => x).ToList(),
+            e => Int(e["sourceID"]) is int s && mine.Contains(s));
+    }
+
+    async Task<object> ShapeCombatAsync(string code, FightInfo fi, List<JsonNode> dmgEvents, List<JsonNode> healEvents, Func<JsonNode, bool> keep)
+    {
         var used = new HashSet<int>();
         var list = new List<(double t, object item)>();
         static double? D(JsonNode e, string k) => e[k]?.GetValue<double>();
@@ -417,12 +439,12 @@ public class ReportService(WclClient wcl)
                 atk = Int(e["attackerID"]),
             }));
         }
-        foreach (var e in dmgTask.Result)
-            if (e["type"]?.GetValue<string>() == "damage" && Int(e["targetID"]) == target) Add(e, "d");
-        foreach (var e in healTask.Result)
+        foreach (var e in dmgEvents)
+            if (e["type"]?.GetValue<string>() == "damage" && keep(e)) Add(e, "d");
+        foreach (var e in healEvents)
         {
+            if (!keep(e)) continue;
             var ty = e["type"]?.GetValue<string>();
-            if (Int(e["targetID"]) != target) continue;
             if (ty == "heal") Add(e, "h");
             else if (ty == "absorbed") Add(e, "a");
         }
