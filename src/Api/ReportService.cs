@@ -22,9 +22,11 @@ public class ReportService(WclClient wcl)
             }}}
             """, new { code }, ListTtl);
         var r = d["reportData"]!["report"]!;
+        var reportStart = r["startTime"]!.GetValue<double>();
         var fights = r["fights"]!.AsArray().Select(f => new
         {
             id = f!["id"]!.GetValue<int>(),
+            start = reportStart + f["startTime"]!.GetValue<double>(), // unix ms (fight times are relative to the report)
             name = f["name"]!.GetValue<string>(),
             encounterId = f["encounterID"]?.GetValue<int>() ?? 0,
             duration = f["endTime"]!.GetValue<double>() - f["startTime"]!.GetValue<double>(),

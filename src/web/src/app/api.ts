@@ -1,5 +1,7 @@
 export interface FightSummary {
-  id: number; name: string; encounterId: number; duration: number; kill?: boolean; difficulty?: number; bossPercentage?: number;
+  id: number; name: string; encounterId: number; duration: number; kill?: boolean;
+  /** wall-clock pull time (unix ms) */
+  start: number; difficulty?: number; bossPercentage?: number;
 }
 export interface ReportSummary { code: string; title?: string; zone?: string; fights: FightSummary[]; }
 

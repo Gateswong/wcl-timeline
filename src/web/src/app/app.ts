@@ -239,11 +239,23 @@ export class App {
     finally { this.busy.set(false); }
   }
 
+  /** "#10 (11:12) · Ula'tek (#8) · 9:42 击杀": pull # in the report, start time, boss, pull # on that boss, duration, result */
   fightLabel(f: FightSummary) {
-    const res = f.kill === true ? '击杀' : f.kill === false ? `未击杀${f.bossPercentage != null ? ' ' + f.bossPercentage + '%' : ''}` : '';
-    return `#${f.id} ${f.name} · ${fmtTime(f.duration)} ${res}`;
+    const n = this.pullNo().get(f.id);
+    const clock = new Date(f.start).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+    const res = f.kill === true ? '击杀' : f.kill === false ? '未击杀' : '';
+    return `#${n?.all} (${clock}) · ${f.name} (#${n?.boss}) · ${fmtTime(f.duration)} ${res}`.trimEnd();
   }
   bossFights = computed(() => this.report()?.fights.filter(f => f.encounterId > 0) ?? []);
+  private pullNo = computed(() => {
+    const m = new Map<number, { all: number; boss: number }>(), perBoss = new Map<number, number>();
+    this.bossFights().forEach((f, i) => {
+      const b = (perBoss.get(f.encounterId) ?? 0) + 1;
+      perBoss.set(f.encounterId, b);
+      m.set(f.id, { all: i + 1, boss: b });
+    });
+    return m;
+  });
 
   // ---------- target options ----------
 
