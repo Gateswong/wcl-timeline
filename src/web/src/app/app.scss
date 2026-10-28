@@ -145,3 +145,12 @@ label.popt { input { margin: 0; } .cnt { margin-left: auto; font-style: normal; 
   .amt { margin-left: 4px; margin-right: 2px; }
   .brief { color: var(--muted); }
 }
+
+.tip .recap { border-top: 1px solid var(--line); margin-top: 4px; padding-top: 2px; }
+.tip .rsec { font-weight: 600; font-size: 11px; margin: 6px 0 2px; color: #cfd6e4; }
+.tip .chips { display: flex; flex-wrap: wrap; gap: 3px; }
+.tip .chip {
+  display: inline-flex; align-items: center; gap: 3px; font-size: 10px; background: #1f2430; border-radius: 3px; padding: 1px 4px;
+  img { width: 14px; height: 14px; border-radius: 2px; } &.deb { background: #3a1f24; } i { font-style: normal; }
+}
+.tip .err { color: #ff9b9b; }

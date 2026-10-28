@@ -55,6 +55,10 @@ api.MapGet("/report/{code}/fight/{fightId:int}/taken",
 api.MapGet("/report/{code}/fight/{fightId:int}/done",
     (string code, int fightId, int source, string? pets, string? ability, ReportService s) => s.GetDoneAsync(code, fightId, source, pets, ability));
 
+// Death recap: killing blow, auras at death and the last 5 s of damage/healing: ?target=1&t=123456 (fight-relative ms)
+api.MapGet("/report/{code}/fight/{fightId:int}/death",
+    (string code, int fightId, int target, double t, ReportService s) => s.GetDeathRecapAsync(code, fightId, target, t));
+
 // Health % series (1s resolution) for one or more units: ?targets=1,2,3&hostility=Enemies
 api.MapGet("/report/{code}/fight/{fightId:int}/health",
     (string code, int fightId, string targets, string? hostility, ReportService s) =>

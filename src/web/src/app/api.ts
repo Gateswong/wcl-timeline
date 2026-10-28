@@ -39,6 +39,10 @@ export interface TakenEvent {
   xa?: number | null; atk?: number | null;
 }
 export interface TakenResult { events: TakenEvent[]; abilities: AbilityMap; }
+/** Death recap: killing blow, auras at death and the last 5 s of damage/healing taken. */
+export interface DeathRecap {
+  t: number; killing: TakenEvent | null; events: TakenEvent[]; buffs: Span[]; debuffs: Span[]; abilities: AbilityMap;
+}
 export interface AurasResult { spans: Span[]; abilities: AbilityMap; }
 export interface HealthSeries { id: number; inst?: number; points: [number, number, number, number][]; }
 
@@ -82,6 +86,8 @@ export const Api = {
     get<TakenResult>(`api/report/${code}/fight/${fight}/taken?${q({ target, ability })}`),
   done: (code: string, fight: number, source: number, pets: number[], ability?: string) =>
     get<TakenResult>(`api/report/${code}/fight/${fight}/done?${q({ source, pets: pets.join(','), ability })}`),
+  death: (code: string, fight: number, target: number, t: number) =>
+    get<DeathRecap>(`api/report/${code}/fight/${fight}/death?${q({ target, t })}`),
   health: (code: string, fight: number, targets: number[], hostility: string) =>
     get<{ series: HealthSeries[] }>(`api/report/${code}/fight/${fight}/health?${q({ targets: targets.join(','), hostility })}`),
 };

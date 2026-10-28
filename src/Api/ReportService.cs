@@ -340,21 +340,28 @@ public class ReportService(WclClient wcl)
         return res;
     }
 
+    public record AuraSpan(int tgt, int ti, int a, double s, double e, int? src, int si);
+
     public async Task<object> GetAurasAsync(string code, int fightId, string type, int? target, string? ability, string? hostility)
     {
         if (type is not ("Buffs" or "Debuffs")) throw new WclException("type must be Buffs or Debuffs", 400);
         var fi = await GetFightInfoAsync(code, fightId);
+        var spans = await BuildAurasAsync(code, fi, type, target, ability);
+        return new { spans, abilities = await AbilitySubset(code, spans.Select(x => x.a).ToHashSet()) };
+    }
+
+    async Task<List<AuraSpan>> BuildAurasAsync(string code, FightInfo fi, string type, int? target, string? ability)
+    {
         // Like DamageTaken, the Buffs/Debuffs views swap roles: sourceID filters the aura holder.
         var raw = await FetchBothAsync(code, fi, type, target, null, ability);
         var dur = fi.End - fi.Start;
 
         var open = new Dictionary<(int tgt, int ti, int ab), (double start, int? src, int si)>();
-        var spans = new List<object>();
-        var used = new HashSet<int>();
+        var spans = new List<AuraSpan>();
         void Close((int tgt, int ti, int ab) k, double end)
         {
             if (!open.Remove(k, out var o)) return;
-            spans.Add(new { tgt = k.tgt, ti = k.ti, a = k.ab, s = o.start, e = end, src = o.src, si = o.si });
+            spans.Add(new AuraSpan(k.tgt, k.ti, k.ab, o.start, end, o.src, o.si));
         }
         foreach (var e in raw.OrderBy(x => x["timestamp"]!.GetValue<double>()))
         {
@@ -365,17 +372,16 @@ public class ReportService(WclClient wcl)
             var k = (tg.Value, Inst(e["targetInstance"]), ab.Value);
             // who applied it: the caster of the latest apply/refresh (or of the remove, for auras up before the pull)
             var src = Int(e["sourceID"]); var si = Inst(e["sourceInstance"]);
-            if (ty is "applybuff" or "applydebuff") { used.Add(ab.Value); if (!open.ContainsKey(k)) open[k] = (t, src, si); }
+            if (ty is "applybuff" or "applydebuff") { if (!open.ContainsKey(k)) open[k] = (t, src, si); }
             else if (ty is "refreshbuff" or "refreshdebuff") { if (open.TryGetValue(k, out var o) && src != null) open[k] = (o.start, src, si); }
             else if (ty is "removebuff" or "removedebuff")
             {
                 if (!open.ContainsKey(k)) open[k] = (0, src, si); // applied before the fight window
-                used.Add(ab.Value);
                 Close(k, t);
             }
         }
         foreach (var k in open.Keys.ToList()) Close(k, dur);
-        return new { spans, abilities = await AbilitySubset(code, used) };
+        return spans;
     }
 
     /// <summary>
@@ -410,34 +416,36 @@ public class ReportService(WclClient wcl)
             e => Int(e["sourceID"]) is int s && mine.Contains(s));
     }
 
+    public record CombatEv(double t, string k, int? src, int si, int? tgt, int ti, int? a, double amt, double? raw, double? mit,
+        double? abs, double? over, int? hit, bool tick, int? xa, int? atk);
+
     async Task<object> ShapeCombatAsync(string code, FightInfo fi, List<JsonNode> dmgEvents, List<JsonNode> healEvents, Func<JsonNode, bool> keep)
     {
+        var list = BuildCombat(fi, dmgEvents, healEvents, keep);
+        return new { events = list, abilities = await AbilitySubset(code, UsedAbilities(list)) };
+    }
+
+    static HashSet<int> UsedAbilities(IEnumerable<CombatEv> evs)
+    {
         var used = new HashSet<int>();
-        var list = new List<(double t, object item)>();
+        foreach (var e in evs) { if (e.a != null) used.Add(e.a.Value); if (e.xa != null) used.Add(e.xa.Value); }
+        return used;
+    }
+
+    static List<CombatEv> BuildCombat(FightInfo fi, List<JsonNode> dmgEvents, List<JsonNode> healEvents, Func<JsonNode, bool> keep)
+    {
+        var list = new List<CombatEv>();
         static double? D(JsonNode e, string k) => e[k]?.GetValue<double>();
         void Add(JsonNode e, string k)
         {
             var a = Int(e["abilityGameID"]); if (a == 0) a = null;
             var xa = Int(e["extraAbilityGameID"]); if (xa == 0) xa = null;
-            if (a != null) used.Add(a.Value);
-            if (xa != null) used.Add(xa.Value);
-            var t = Math.Round(e["timestamp"]!.GetValue<double>() - fi.Start);
-            list.Add((t, new
-            {
-                t, k,
-                src = Int(e["sourceID"]), si = Inst(e["sourceInstance"]),
-                tgt = Int(e["targetID"]), ti = Inst(e["targetInstance"]),
-                a,
-                amt = D(e, "amount") ?? 0,
-                raw = D(e, "unmitigatedAmount"),
-                mit = D(e, "mitigated"),
-                abs = D(e, "absorbed"),
-                over = k == "d" ? D(e, "overkill") : D(e, "overheal"),
-                hit = Int(e["hitType"]),
-                tick = e["tick"]?.GetValue<bool>() ?? false,
-                xa,
-                atk = Int(e["attackerID"]),
-            }));
+            list.Add(new CombatEv(
+                Math.Round(e["timestamp"]!.GetValue<double>() - fi.Start), k,
+                Int(e["sourceID"]), Inst(e["sourceInstance"]), Int(e["targetID"]), Inst(e["targetInstance"]), a,
+                D(e, "amount") ?? 0, D(e, "unmitigatedAmount"), D(e, "mitigated"), D(e, "absorbed"),
+                k == "d" ? D(e, "overkill") : D(e, "overheal"),
+                Int(e["hitType"]), e["tick"]?.GetValue<bool>() ?? false, xa, Int(e["attackerID"])));
         }
         foreach (var e in dmgEvents)
             if (e["type"]?.GetValue<string>() == "damage" && keep(e)) Add(e, "d");
@@ -448,7 +456,36 @@ public class ReportService(WclClient wcl)
             if (ty == "heal") Add(e, "h");
             else if (ty == "absorbed") Add(e, "a");
         }
-        return new { events = list.OrderBy(x => x.t).Select(x => x.item).ToList(), abilities = await AbilitySubset(code, used) };
+        list.Sort((x, y) => x.t.CompareTo(y.t));
+        return list;
+    }
+
+    /// <summary>
+    /// Death recap of a unit dying at fight-relative time t: the killing blow (latest damage with overkill, else real
+    /// damage in the last 1.5 s), buffs and debuffs it had at that moment, and everything it took/received in the last 5 s.
+    /// </summary>
+    public async Task<object> GetDeathRecapAsync(string code, int fightId, int target, double t)
+    {
+        var fi = await GetFightInfoAsync(code, fightId);
+        var dmg = FetchBothAsync(code, fi, "DamageTaken", target, null, null);
+        var heal = FetchBothAsync(code, fi, "Healing", null, target, null);
+        var buffs = BuildAurasAsync(code, fi, "Buffs", target, null);
+        var debuffs = BuildAurasAsync(code, fi, "Debuffs", target, null);
+        await Task.WhenAll(dmg, heal, buffs, debuffs);
+
+        var all = BuildCombat(fi, dmg.Result, heal.Result, e => Int(e["targetID"]) == target);
+        var window = all.Where(e => e.t >= t - 5000 && e.t <= t + 50).ToList();
+        // killing blow: damage with overkill, else real damage in the last 1.5 s; none for instant-kill mechanics
+        var hits = window.Where(e => e.k == "d" && e.amt + (e.abs ?? 0) > 0).ToList();
+        var killing = hits.Where(e => (e.over ?? 0) > 0).OrderByDescending(e => e.t).FirstOrDefault()
+                      ?? hits.Where(e => e.t >= t - 1500).OrderByDescending(e => e.t).FirstOrDefault();
+        // auras are removed at the moment of death, so "active" = started before and ended at/after it
+        List<AuraSpan> Active(List<AuraSpan> spans) => spans.Where(x => x.s <= t + 50 && x.e >= t - 150).OrderBy(x => x.s).ToList();
+        var b = Active(buffs.Result); var d = Active(debuffs.Result);
+
+        var used = UsedAbilities(window);
+        foreach (var x in b.Concat(d)) used.Add(x.a);
+        return new { t, killing, events = window, buffs = b, debuffs = d, abilities = await AbilitySubset(code, used) };
     }
 
     public async Task<object> GetHealthAsync(string code, int fightId, string targets, string? hostility)

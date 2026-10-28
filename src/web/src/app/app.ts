@@ -1,6 +1,6 @@
 import { Component, computed, signal } from '@angular/core';
 import {
-  AbilityMap, Actor, Api, TakenEvent, AurasResult, FightDetail, FightSummary, HealthSeries, LogEvent, ReportSummary, Span,
+  AbilityMap, Actor, Api, DeathRecap, TakenEvent, AurasResult, FightDetail, FightSummary, HealthSeries, LogEvent, ReportSummary, Span,
   fmtTime, fmtTimeP, iconUrl, parseReportUrl, setFetchedListener, specIconUrl,
 } from './api';
 
@@ -57,6 +57,8 @@ export interface EvRow {
   amts?: { t: string; c: string }[]; lines?: string[];
   /** several close events folded into one row; children = the single events, brief = compact detail line */
   merged?: boolean; children?: EvRow[]; brief?: string;
+  /** player death rows: whose death and when (for the death recap) */
+  death?: { id: number; t: number };
 }
 /** A buff/debuff: start dot, end dot and a connecting line, placed in a lane. */
 export interface AuraRow {
@@ -67,6 +69,15 @@ export interface AuraRow {
 export interface SrcOpt { key: string; label: string; icon?: string; group: string; count: number; }
 /** One buff/debuff offered in an aura column's filter panel. */
 export interface AbOpt { id: number; name: string; icon?: string; count: number; }
+/** What the tooltip shows for a death recap. */
+export interface RecapView {
+  loading?: boolean; error?: string;
+  killing?: { icon?: string; name: string; amt: string; src: string; brief: string } | null;
+  buffs?: { icon?: string; name: string; src: string; n: number }[];
+  debuffs?: { icon?: string; name: string; src: string; n: number }[];
+  events?: { rel: string; icon?: string; name: string; amt: string; cls: string; src: string; brief: string }[];
+  more?: number;
+}
 export interface Tip { casts?: EvRow[]; more?: number; aura?: AuraRow; }
 export interface Line { color: string; points: string; label: string; }
 export interface Mark { x: number; y: number; text: string; color: string; }
@@ -779,10 +790,72 @@ export class App {
   // hover tooltip for casts (all casts within a few px of each other) and auras
   tip = signal<Tip | null>(null);
   showCast(v: ColView, r: EvRow, single = false) {
+    if (r.death) { this.tip.set({ casts: [r] }); void this.loadRecap(r.death); return; }
     const near = single ? [r] : v.rows.filter(x => Math.abs(x.y - r.y) <= 10);
     this.tip.set({ casts: near.slice(0, 8), more: Math.max(0, near.length - 8) });
   }
   showAura(a: AuraRow) { this.tip.set({ aura: a }); }
+
+  // ---------- death recap ----------
+
+  private recaps = signal<Record<string, DeathRecap | 'loading' | { error: string }>>({});
+  private recapKey(d: { id: number; t: number }) { return `${this.report()?.code}:${this.fight()?.id}:${d.id}:${d.t}`; }
+  private async loadRecap(d: { id: number; t: number }) {
+    const key = this.recapKey(d);
+    if (this.recaps()[key]) return;
+    this.recaps.update(m => ({ ...m, [key]: 'loading' }));
+    try {
+      const r = await Api.death(this.report()!.code, this.fight()!.id, d.id, d.t);
+      this.recaps.update(m => ({ ...m, [key]: r }));
+    } catch (e) {
+      this.recaps.update(m => ({ ...m, [key]: { error: String((e as Error).message) } }));
+    }
+  }
+  recapView(d: { id: number; t: number }): RecapView {
+    const r = this.recaps()[this.recapKey(d)];
+    if (!r || r === 'loading') return { loading: true };
+    if ('error' in r) return { error: r.error };
+    const abName = (id?: number | null) => (id != null ? r.abilities[id]?.name ?? `#${id}` : '未知技能');
+    const abIcon = (id?: number | null) => (id != null ? iconUrl(r.abilities[id]?.icon) : undefined);
+    const full = (n?: number | null) => Math.round(n ?? 0).toLocaleString('en-US');
+    const brief = (e: TakenEvent) => {
+      const hit = HIT_LABEL[e.hit ?? 1] ?? '';
+      const parts = e.k === 'd'
+        ? [hit, e.tick ? '周期' : '', e.raw && e.mit ? `减免 ${Math.round((e.mit / e.raw) * 100)}%` : '', e.abs ? `吸收 ${shortNum(e.abs)}` : '', e.over ? `过量 ${shortNum(e.over)}` : '']
+        : e.k === 'h' ? [hit, e.tick ? '周期' : '', e.over ? `过量 ${shortNum(e.over)}` : '']
+          : [`抵挡 ${this.unitName(e.atk) || '未知'}${e.xa != null ? ' 的 ' + abName(e.xa) : ''}`];
+      return parts.filter(Boolean).join(' · ');
+    };
+    // the same aura from several casters (e.g. Ebon Might) is shown once with a count
+    const auras = (spans: { a: number; src?: number | null; si?: number }[]) => {
+      const by = new Map<number, { icon?: string; name: string; src: string; n: number }>();
+      for (const sp of spans) {
+        const o = by.get(sp.a);
+        if (o) { o.n++; continue; }
+        by.set(sp.a, { icon: abIcon(sp.a), name: abName(sp.a), src: this.unitName(sp.src, sp.si), n: 1 });
+      }
+      return [...by.values()];
+    };
+    const k = r.killing;
+    const SIGN: Record<string, string> = { d: '-', h: '+', a: '🛡' };
+    // newest first (what happened right before the death matters most); heals that were pure overheal are left out
+    const useful = r.events.filter(e => !(e.k === 'h' && e.amt === 0));
+    const shown = useful.slice(-25).reverse();
+    return {
+      killing: k ? {
+        icon: abIcon(k.a), name: abName(k.a), amt: full(k.amt), src: this.unitName(k.src, k.si) || '未知来源',
+        brief: [k.over ? `过量 ${full(k.over)}` : '', k.abs ? `被吸收 ${full(k.abs)}` : '', HIT_LABEL[k.hit ?? 1] ?? '',
+          `${((k.t - r.t) / 1000).toFixed(1)}s`].filter(Boolean).join(' · '),
+      } : null,
+      buffs: auras(r.buffs),
+      debuffs: auras(r.debuffs),
+      events: shown.map(e => ({
+        rel: `${((e.t - r.t) / 1000).toFixed(1)}s`, icon: abIcon(e.a), name: abName(e.a),
+        amt: `${SIGN[e.k]}${shortNum(e.amt)}`, cls: 'amt-' + e.k, src: this.unitName(e.src, e.si) || '未知来源', brief: brief(e),
+      })),
+      more: useful.length - shown.length,
+    };
+  }
   hideTip() { this.tip.set(null); }
   tipPos = computed(() => {
     const m = this.mouse();
@@ -858,6 +931,7 @@ export class App {
         icon: e.type === 'death' ? specIconUrl(e.tgt != null ? this.actorMap().get(e.tgt) : undefined) : iconUrl(ab?.icon),
         name, route, time: fmtTimeP(e.t), detail, src,
         lane, color: def.stagger ? PALETTE[lane % PALETTE.length] : undefined,
+        death: e.type === 'death' && e.tgt != null && this.actorMap().get(e.tgt)?.type === 'Player' ? { id: e.tgt, t: e.t } : undefined,
       };
     });
     return { rows, lanes: Math.max(1, laneOf.size) };

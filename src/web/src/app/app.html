@@ -333,7 +333,7 @@
   </div>
 
   @if (tip(); as t) {
-    <div class="tip" [class.wide]="!!t.casts?.[0]?.children" [style.left.px]="tipPos().left" [style.top.px]="tipPos().top" [style.bottom.px]="tipPos().bottom">
+    <div class="tip" [class.wide]="!!t.casts?.[0]?.children || !!t.casts?.[0]?.death" [style.left.px]="tipPos().left" [style.top.px]="tipPos().top" [style.bottom.px]="tipPos().bottom">
       @if (t.casts) {
         @for (c of t.casts; track $index) {
           <div class="tcast" [class.int]="c.interrupted">
@@ -345,6 +345,46 @@
               @for (l of c.lines ?? []; track $index) { <div class="dl">{{ l }}</div> }
             </div>
           </div>
+          @if (c.death) {
+            @let rv = recapView(c.death);
+            <div class="recap">
+              @if (rv.loading) { <div class="muted">正在加载死亡回放…</div> }
+              @else if (rv.error) { <div class="err">{{ rv.error }}</div> }
+              @else {
+                <div class="rsec">致死一击</div>
+                @if (rv.killing; as k) {
+                  <div class="tkid">
+                    @if (k.icon) { <img [src]="k.icon" /> } @else { <i class="noicon"></i> }
+                    <div>
+                      <div><span class="amt amt-d">-{{ k.amt }}</span> {{ k.name }} <span class="muted">来自 {{ k.src }}</span></div>
+                      @if (k.brief) { <div class="brief">{{ k.brief }}</div> }
+                    </div>
+                  </div>
+                } @else { <div class="muted">未找到致死伤害（可能是即死机制，或日志中没有记录）</div> }
+                <div class="rsec">死亡时的 Buff（{{ rv.buffs!.length }}）</div>
+                <div class="chips">
+                  @for (b of rv.buffs!; track $index) { <span class="chip">@if (b.icon) { <img [src]="b.icon" /> }{{ b.name }}@if (b.n > 1) { <i class="muted"> ×{{ b.n }}</i> }</span> }
+                </div>
+                <div class="rsec">死亡时的 Debuff（{{ rv.debuffs!.length }}）</div>
+                <div class="chips">
+                  @for (b of rv.debuffs!; track $index) { <span class="chip deb">@if (b.icon) { <img [src]="b.icon" /> }{{ b.name }}<i class="muted"> · {{ b.src }}{{ b.n > 1 ? ' 等 ×' + b.n : '' }}</i></span> }
+                  @if (!rv.debuffs!.length) { <span class="muted">无</span> }
+                </div>
+                <div class="rsec">最后 5 秒（{{ rv.events!.length + (rv.more ?? 0) }}，由近到远，不含完全过量的治疗）</div>
+                @for (e of rv.events!; track $index) {
+                  <div class="tkid">
+                    @if (e.icon) { <img [src]="e.icon" /> } @else { <i class="noicon"></i> }
+                    <div>
+                      <div><span class="muted">{{ e.rel }}</span><span [class]="'amt ' + e.cls">{{ e.amt }}</span> {{ e.name }} <span class="muted">来自 {{ e.src }}</span></div>
+                      @if (e.brief) { <div class="brief">{{ e.brief }}</div> }
+                    </div>
+                  </div>
+                }
+                @if (!rv.events!.length) { <div class="muted">无</div> }
+                @if (rv.more) { <div class="muted">…更早的 {{ rv.more }} 个事件未显示</div> }
+              }
+            </div>
+          }
           @if (c.children) {
             <div class="tkids">
               @for (k of c.children.slice(0, 30); track $index) {
